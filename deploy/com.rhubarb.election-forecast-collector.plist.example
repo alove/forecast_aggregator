@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.rhubarb.election-forecast-collector</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/absolute/path/election_forecast_collector/run.sh</string>
+    <string>collect</string>
+    <string>--save-raw</string>
+  </array>
+  <key>WorkingDirectory</key><string>/absolute/output/directory</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>EFC_CONTACT_EMAIL</key><string>replace-me@example.com</string></dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>20</integer></dict>
+  <key>StandardOutPath</key><string>/absolute/output/directory/collector.log</string>
+  <key>StandardErrorPath</key><string>/absolute/output/directory/collector.log</string>
+</dict>
+</plist>

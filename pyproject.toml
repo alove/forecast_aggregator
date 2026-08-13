@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rhubarb-election-forecast-collector"
+version = "1.1.1"
+description = "Append-only collector for machine-readable 2026 U.S. congressional election forecasts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Rhubarb Analytics Inc."}]
+dependencies = []
+
+[project.scripts]
+election-forecast-collector = "forecast_collector.cli:main"
+
+[tool.setuptools]
+packages = ["forecast_collector", "forecast_collector.sources"]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect public 2026 congressional election forecasts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=replace-me
+WorkingDirectory=/absolute/output/directory
+Environment=EFC_CONTACT_EMAIL=replace-me@example.com
+ExecStart=/absolute/path/election_forecast_collector/run.sh collect --save-raw
