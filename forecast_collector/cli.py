@@ -94,10 +94,11 @@ def command_sources() -> int:
     print("  election-statsheet  national House/Senate, House districts, Senate races, historical timeline")
     print("  electindex          national House/Senate/PV, House districts, Senate races, latest CSV snapshot")
     print("  grant-williams      national House/Senate/PV, House districts, Senate races, latest atomic JSON bundle")
+    print("  race-to-the-wh      national House/Senate/PV, House districts, Senate races, public Infogram forecast")
     print(
-        "\nThese adapters use stable public raw GitHub CSV/JSON endpoints. "
-        "Race to the WH is not yet enabled because no stable public machine-readable "
-        "endpoint has been verified for the complete forecast bundle."
+        "\nThe first three adapters use public raw GitHub CSV/JSON endpoints. "
+        "Race to the WH discovers the current public House and Senate Infogram embeds "
+        "from the publisher pages and parses their embedded static forecast data."
     )
     return 0
 

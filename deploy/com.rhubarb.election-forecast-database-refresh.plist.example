@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rhubarb.election-forecast-database-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/replace-me/f_collector/election_forecasts_ecs.sh</string>
+    <string>refresh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/replace-me/f_collector</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>EFC_CONTACT_EMAIL</key>
+    <string>replace-me@example.com</string>
+    <key>AWS_REGION</key>
+    <string>us-east-2</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>20</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/replace-me/f_collector/collector.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/replace-me/f_collector/collector.log</string>
+</dict>
+</plist>

@@ -1,0 +1,440 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Self-contained public 2026 election forecast PostgreSQL service for Rhubarb staging.
+  The database is rebuilt from the f_collector CSV history bundled in the
+  container whenever the Fargate task is replaced; it is intentionally
+  ephemeral at runtime and remotely read-only.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Immutable ECR image URI, preferably including an image digest.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two public subnets in distinct Availability Zones.
+
+  AllowedCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: IPv4 CIDR allowed to reach the public PostgreSQL listener.
+    AllowedPattern: '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$'
+
+  DatabaseName:
+    Type: String
+    Default: election_forecasts
+    AllowedPattern: '^[A-Za-z_][A-Za-z0-9_]{0,62}$'
+
+  AdminUsername:
+    Type: String
+    Default: forecast_admin
+    AllowedPattern: '^[A-Za-z_][A-Za-z0-9_]{0,62}$'
+
+  ReaderUsername:
+    Type: String
+    Default: rhubarb_forecast_reader
+    AllowedPattern: '^[A-Za-z_][A-Za-z0-9_]{0,62}$'
+
+  ContainerPort:
+    Type: Number
+    Default: 5432
+    MinValue: 1
+    MaxValue: 65535
+
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048']
+
+  TaskMemory:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '3072', '4096', '5120', '6144', '7168', '8192']
+
+  ClusterName:
+    Type: String
+    Default: rhubarb-staging-election-forecast-cluster
+
+  ServiceName:
+    Type: String
+    Default: rhubarb-staging-election-forecast-service
+
+  TaskFamily:
+    Type: String
+    Default: rhubarb-staging-election-forecast-task
+
+  ContainerName:
+    Type: String
+    Default: rhubarb-staging-election-forecast-db
+
+  NetworkLoadBalancerName:
+    Type: String
+    Default: rhubarb-stg-forecast-nlb
+    MaxLength: 32
+    AllowedPattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$'
+
+  TargetGroupName:
+    Type: String
+    Default: rhubarb-stg-forecast-tg
+    MaxLength: 32
+    AllowedPattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$'
+
+  LogGroupName:
+    Type: String
+    Default: /ecs/rhubarb-staging-election-forecasts
+
+  ApplicationName:
+    Type: String
+    Default: rhubarb
+
+  EnvironmentName:
+    Type: String
+    Default: staging
+
+Resources:
+  AdminPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Ephemeral admin password used only inside the election forecast PostgreSQL task.
+      GenerateSecretString:
+        PasswordLength: 40
+        ExcludePunctuation: true
+        IncludeSpace: false
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  ReaderPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Read-only password for the Rhubarb election forecast datasource.
+      GenerateSecretString:
+        PasswordLength: 40
+        ExcludePunctuation: true
+        IncludeSpace: false
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadElectionForecastSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource:
+                  - !Ref AdminPasswordSecret
+                  - !Ref ReaderPasswordSecret
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      RetentionInDays: 7
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ingress for the Rhubarb staging election forecast PostgreSQL NLB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          CidrIp: !Ref AllowedCidr
+          Description: Public PostgreSQL access; authentication and TLS are enforced by PostgreSQL
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: rhubarb-staging-election-forecasts-nlb-sg
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Accept PostgreSQL traffic only from the election forecast NLB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          Description: PostgreSQL and TCP health checks from the NLB only
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: rhubarb-staging-election-forecasts-task-sg
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref NetworkLoadBalancerName
+      Type: network
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: 'false'
+        - Key: load_balancing.cross_zone.enabled
+          Value: 'true'
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref TargetGroupName
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: TCP
+      Port: !Ref ContainerPort
+      HealthCheckEnabled: true
+      HealthCheckProtocol: TCP
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '10'
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Protocol: TCP
+      Port: !Ref ContainerPort
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref TaskFamily
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      EphemeralStorage:
+        SizeInGiB: 30
+      ContainerDefinitions:
+        - Name: !Ref ContainerName
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - Name: postgres
+              ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: PGDATA
+              Value: /var/lib/postgresql/data/pgdata
+            - Name: POSTGRES_DB
+              Value: !Ref DatabaseName
+            - Name: POSTGRES_USER
+              Value: !Ref AdminUsername
+            - Name: POSTGRES_PORT
+              Value: !Sub '${ContainerPort}'
+            - Name: PGPORT
+              Value: !Sub '${ContainerPort}'
+            - Name: POSTGRES_INITDB_ARGS
+              Value: --auth-host=scram-sha-256 --auth-local=trust --encoding=UTF8
+            - Name: FORECAST_READER_USER
+              Value: !Ref ReaderUsername
+            - Name: TZ
+              Value: UTC
+          Secrets:
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Ref AdminPasswordSecret
+            - Name: FORECAST_READER_PASSWORD
+              ValueFrom: !Ref ReaderPasswordSecret
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - pg_isready -h /var/run/postgresql -U "$POSTGRES_USER" -d "$POSTGRES_DB" || exit 1
+            Interval: 15
+            Timeout: 5
+            Retries: 5
+            StartPeriod: 300
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: postgres
+          StopTimeout: 120
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+    Properties:
+      Cluster: !Ref Cluster
+      ServiceName: !Ref ServiceName
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      DesiredCount: 1
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      HealthCheckGracePeriodSeconds: 600
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref PublicSubnetIds
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: !Ref ContainerName
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+      Tags:
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Component
+          Value: election-forecasts-postgres
+
+Outputs:
+  EndpointHost:
+    Description: Public Network Load Balancer DNS name.
+    Value: !GetAtt NetworkLoadBalancer.DNSName
+
+  EndpointPort:
+    Value: !Ref ContainerPort
+
+  DatabaseName:
+    Value: !Ref DatabaseName
+
+  ReaderUsername:
+    Value: !Ref ReaderUsername
+
+  ReaderPasswordSecretArn:
+    Value: !Ref ReaderPasswordSecret
+
+  AdminPasswordSecretArn:
+    Value: !Ref AdminPasswordSecret
+
+  ClusterName:
+    Value: !Ref Cluster
+
+  ServiceName:
+    Value: !Ref ServiceName
+
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+
+  LogGroupName:
+    Value: !Ref LogGroup
+
+  DeployedImageUri:
+    Value: !Ref ImageUri

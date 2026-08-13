@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Rhubarb election forecast database refresh
+
+[Timer]
+OnCalendar=*-*-* 09:20:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=election-forecast-database-refresh.service
+
+[Install]
+WantedBy=timers.target

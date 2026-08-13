@@ -5,4 +5,4 @@ services:
       EFC_CONTACT_EMAIL: "replace-me@example.com"
     volumes:
       - ./data:/data
-    command: ["collect", "--output", "/data/election_forecasts_2026.csv", "--save-raw", "--raw-dir", "/data/raw_snapshots"]
+    command: ["collect", "--output-dir", "/data", "--save-raw"]

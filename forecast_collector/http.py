@@ -9,6 +9,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from . import __version__
 from .errors import FetchError
 
 
@@ -39,7 +40,7 @@ class HttpClient:
         self.max_response_bytes = max(1, int(max_response_bytes))
         contact = os.environ.get("EFC_CONTACT_EMAIL", "").strip()
         suffix = f"; contact={contact}" if contact else ""
-        self.user_agent = f"RhubarbElectionForecastCollector/1.0{suffix}"
+        self.user_agent = f"RhubarbElectionForecastCollector/{__version__}{suffix}"
 
     def get(self, url: str) -> HttpResponse:
         last_error: BaseException | None = None
@@ -49,7 +50,7 @@ class HttpClient:
                 url,
                 headers={
                     "User-Agent": self.user_agent,
-                    "Accept": "application/json,text/csv,text/plain,*/*;q=0.5",
+                    "Accept": "application/json,text/csv,text/plain,text/html,*/*;q=0.5",
                     "Cache-Control": "no-cache",
                 },
                 method="GET",

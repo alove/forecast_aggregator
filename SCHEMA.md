@@ -69,3 +69,27 @@ Metric types:
 - `US House District Vote Projection`
 - `US Senate Race Party Probability`
 - `US Senate Race Vote Projection`
+
+## PostgreSQL database mapping
+
+The standalone ECS/local loader preserves the CSV field names and maps types as
+follows:
+
+- pull/update fields → `TIMESTAMPTZ`;
+- forecast/election dates → `DATE`;
+- `value`, `median_value`, `low_value`, `high_value` → `DOUBLE PRECISION`;
+- `house_seat_number` → `SMALLINT`;
+- `special_election` → `BOOLEAN`;
+- identifiers such as `state_fips` and four-character SFCD → `TEXT`, preserving
+  leading zeroes.
+
+Tables and views:
+
+```text
+public.election_forecasts_2026_national
+public.election_forecasts_2026_state
+public.election_forecasts_2026_load_metadata
+public.election_forecasts_2026_latest_national
+public.election_forecasts_2026_latest_state
+public.election_forecasts_2026_latest_vendor_runs
+```

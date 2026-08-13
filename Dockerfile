@@ -12,4 +12,4 @@ WORKDIR /data
 ENV PYTHONPATH=/app
 
 ENTRYPOINT ["python", "-m", "forecast_collector"]
-CMD ["collect", "--output", "/data/election_forecasts_2026.csv"]
+CMD ["collect", "--output-dir", "/data"]

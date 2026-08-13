@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect and redeploy Rhubarb 2026 election forecast PostgreSQL
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=replace-me
+WorkingDirectory=/home/replace-me/f_collector
+Environment=EFC_CONTACT_EMAIL=replace-me@example.com
+Environment=AWS_REGION=us-east-2
+ExecStart=/home/replace-me/f_collector/election_forecasts_ecs.sh refresh

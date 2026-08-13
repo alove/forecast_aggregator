@@ -23,5 +23,7 @@ if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
 fi
 
 echo "Created isolated Python environment: $VENV_DIR"
-echo "No third-party packages are required."
-echo "From an output directory, run: $SCRIPT_DIR/run.sh collect"
+echo "No third-party packages are required for collection or ECS deployment."
+echo "Collect locally:       $SCRIPT_DIR/run.sh collect --output-dir $SCRIPT_DIR/collected_data"
+echo "Validate DB inputs:    $SCRIPT_DIR/election_forecasts_ecs.sh validate"
+echo "Deploy forecast DB:    $SCRIPT_DIR/election_forecasts_ecs.sh up"

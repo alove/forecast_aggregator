@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!prepare_election_forecasts.py
+!docker-entrypoint-rhubarb.sh
+!initdb/
+!initdb/*.sh
+!data/
+!data/election_forecasts_2026_national.csv
+!data/election_forecasts_2026_state.csv

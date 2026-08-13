@@ -38,9 +38,29 @@ Raw files:
 
 The adapter uses mean chamber seats, the published Democratic control probability and its binary complement, projected all-party House vote counts, and the House/Senate rows from the race summary. Where ElectIndex represents an independent candidate in the Democratic probability field because no Democrat is running, the collector maps that probability to Other and sets Democratic probability to zero.
 
+### Race to the WH / Logan Phillips
+
+Publisher pages:
+
+- `https://www.racetothewh.com/house`
+- `https://www.racetothewh.com/senate/26`
+
+The House and Senate pages publish the current forecasts through public Infogram embeds. The adapter first discovers the current forecast embed on each publisher page, distinguishing it from the polling graphics that also appear on those pages. It then parses the static `window.infographicData` payload delivered by the public Infogram embed.
+
+The parser supports both Infogram structures seen in public projects: modern `props.chartData` entities and the legacy `elements[]` chart structure with direct `data` and `sheetnames` fields. Tables are selected semantically rather than by fragile element IDs. The normalized snapshot must include:
+
+- House projected seats and chamber-control probabilities;
+- Senate projected seats and chamber-control probabilities;
+- the national House popular-vote projection;
+- exactly 435 House district forecasts; and
+- exactly 35 Senate race forecasts.
+
+If a national seat figure is not separately displayed, the House expected-seat projection can be derived only from a complete set of all 435 published district probabilities. The adapter does not infer a national metric from a partial race table. The published House popular-vote figure is labeled as Race to the WH's adjusted two-party projection because the provider's methodology imputes uncontested districts.
+
+The current public embed IDs are retained as fallbacks, but the normal path discovers the embeds from the publisher pages on every run. Raw mode saves both landing pages, both exact Infogram responses, and an extracted-table diagnostic file. Any missing metric, conflicting race record, or incomplete race count fails the source before CSV append.
+
 ## Deliberately not enabled yet
 
-- **Race to the WH:** this was the fourth qualifying public model identified in the source review. Its public site exposes the rendered 2026 House and Senate forecasts, including all 435 House races, but a stable public machine-readable CSV/JSON/API endpoint for the complete House + Senate + national House-vote bundle has not yet been verified. It is therefore not enabled rather than relying on an untested/brittle rendered-page parser.
 - **VoteHub, FiftyPlusOne, Silver Bulletin/FLIPR, The Economist, and other rendered/subscriber models:** no approved stable machine endpoint is enabled here. This package contains no login automation, paywall bypass, CAPTCHA handling, or access-control circumvention.
 
 This file records implementation scope, not a legal opinion. The collector should be deployed only for sources and uses for which the operator has the necessary rights or permission.

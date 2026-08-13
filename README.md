@@ -7,8 +7,9 @@ Local-first append-only collector for publicly available 2026 U.S. congressional
 1. **Election StatSheet / Mac Tan** — national House seats and House popular vote, national Senate seats, all 435 House district probabilities, all 35 Senate race probabilities, and a historical timeline.
 2. **ElectIndex** — public chamber totals, projected national House vote counts, all 435 House races, and all 35 Senate races.
 3. **Grant Williams** — an atomic public House/Senate JSON bundle with national forecasts, all 435 House districts, and all Senate races in the cycle.
+4. **Race to the WH / Logan Phillips** — the public House and Senate forecast Infograms: national chamber projections and control probabilities, the adjusted national House popular-vote projection, all 435 House districts, and all 35 Senate races.
 
-These three adapters use stable, public raw CSV/JSON endpoints. **Race to the WH is the fourth qualifying model discussed during source research, but it is not enabled yet because a stable public machine-readable endpoint for its complete forecast bundle has not been verified.** Its public rendered pages are not silently scraped by this release.
+The first three adapters use stable public raw CSV/JSON endpoints. Race to the WH publishes its forecast through public Infogram embeds. That adapter discovers the current embeds from the publisher's House and Senate pages, reads the static data payload already delivered with each public embed, and refuses the source run unless it can identify the required national metrics plus exactly 435 House districts and 35 Senate races. It does not use a browser, log in, or bypass an access control.
 
 ## Install
 
@@ -105,6 +106,7 @@ If a provider publishes a new/corrected run ID, the new values append as a new o
 ./run.sh collect --source election-statsheet
 ./run.sh collect --source electindex
 ./run.sh collect --source grant-williams
+./run.sh collect --source race-to-the-wh
 
 # Historical Election StatSheet backfill
 ./run.sh collect --source election-statsheet --backfill-election-statsheet
@@ -148,3 +150,68 @@ python3 -m unittest discover -s tests -v
 ```
 
 The source adapters still validate their complete internal snapshots before conversion to the two export files. The export layer then independently validates metric types, values, geography identifiers, second-level timestamps, and duplicate identities.
+
+For a first check of the rendered-source adapter without modifying either CSV:
+
+```bash
+./run.sh collect \
+  --source race-to-the-wh \
+  --output-dir ~/f_collector/collected_data \
+  --save-raw \
+  --dry-run \
+  --verbose
+```
+
+If Race to the WH changes its Infogram layout, the adapter exits that source with a visible error rather than appending a partial or malformed snapshot. Other selected sources remain independent.
+
+## Standalone ECS PostgreSQL datasource
+
+The repository includes a deployable read-only PostgreSQL service containing
+both accumulated CSVs in one database. It follows the same standalone
+ECS/Fargate + ECR + CloudFormation + public NLB pattern used for the Rhubarb
+Stack Overflow survey datasource.
+
+```bash
+# Validate the files currently in ~/f_collector/collected_data.
+./election_forecasts_ecs.sh validate
+
+# First deploy using the existing files.
+./election_forecasts_ecs.sh up
+
+# Poll sources, append locally, rebuild the image, and update ECS.
+EFC_CONTACT_EMAIL='you@example.com' ./election_forecasts_ecs.sh refresh
+
+# Retrieve the stable read-only connection.
+./election_forecasts_ecs.sh credentials
+
+# Inspect or remove the standalone service.
+./election_forecasts_ecs.sh status
+./election_forecasts_ecs.sh logs
+./election_forecasts_ecs.sh down
+```
+
+Default database objects:
+
+```text
+public.election_forecasts_2026_national
+public.election_forecasts_2026_state
+public.election_forecasts_2026_load_metadata
+public.election_forecasts_2026_latest_national
+public.election_forecasts_2026_latest_state
+public.election_forecasts_2026_latest_vendor_runs
+```
+
+The database name is `election_forecasts`, the fixed reader name is
+`rhubarb_forecast_reader`, and the complete generated URI is written to:
+
+```text
+AWS Secrets Manager:
+  rhubarb/staging/election-forecasts-postgres/DATABASE_URL
+
+Local mode-600 file:
+  forecast_database_ecs/.outputs/election_forecasts_connection.env
+```
+
+The Fargate database is ephemeral; the authoritative append-only files remain
+under `collected_data`. The complete deployment and refresh procedure is in
+[`forecast_database_ecs/README.md`](forecast_database_ecs/README.md).
