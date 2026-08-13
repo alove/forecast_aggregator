@@ -14,8 +14,8 @@ It mirrors the standalone Stack Overflow survey database pattern:
 - a single CloudFormation stack that can be created, refreshed, inspected, and
   destroyed without touching the Rhubarb application stack.
 
-The running Fargate task is intentionally ephemeral. The authoritative history
-remains in:
+The running Fargate task is intentionally ephemeral. For the GitHub-canonical
+workflow, the authoritative history is the committed version of:
 
 ```text
 ~/f_collector/collected_data/election_forecasts_2026_national.csv
@@ -24,9 +24,12 @@ remains in:
 
 A deploy validates those files, copies them into the Docker build context, and
 bakes the complete history into an immutable PostgreSQL image. If ECS replaces
-the task, PostgreSQL reconstructs the same database from the image. A refresh
-polls the forecast sources, appends new observations locally, and deploys a new
-image containing the expanded history.
+the task, PostgreSQL reconstructs the same database from the image.
+
+For normal scheduled operation use `../sync_forecast_database.sh`. It fetches
+the configured GitHub branch, refuses unexplained local changes, collects into
+the tracked CSVs, validates that GitHub history was only appended to, commits
+and pushes changed data, then deploys the exact canonical dataset.
 
 ## Default AWS resources
 
@@ -66,6 +69,43 @@ to match the Fargate task architecture.
 A non-secret override template is available at
 `forecast_database_ecs/config.env.example`. Copy it elsewhere or source it and
 change only the values you need; passwords are never stored in that file.
+
+## Recommended GitHub-canonical runner
+
+```bash
+cd ~/f_collector
+EFC_CONTACT_EMAIL='you@example.com' ./sync_forecast_database.sh
+```
+
+Actions/options:
+
+- `run` (default): collect -> compare against fetched GitHub CSVs -> validate
+  append-only history -> commit/push -> deploy if the AWS data fingerprint or
+  deployer version is stale.
+- `deploy`: skip vendor polling and deploy the current GitHub canonical data if
+  needed. This is the recovery path after a prior AWS failure.
+- `status`: fetch and compare local/GitHub/AWS state without committing or
+  deploying.
+- `unlock`: remove a stale lock only when its recorded process is no longer
+  running.
+- `--source SLUG` (repeatable): limit a normal `run` to selected collectors.
+- `--save-raw`: preserve raw vendor responses locally; raw files are ignored by
+  Git.
+- `--skip-collect`: do not contact vendor sites. Use the existing canonical CSVs,
+  compare them to GitHub, and verify that the current Git HEAD can be pushed. If
+  there is no data diff, no empty commit is created; the push check continues.
+- `--force-deploy`: rebuild/redeploy even when AWS already serves the current
+  data fingerprint. `run --skip-collect --force-deploy` is the recommended full
+  Git/ECR/ECS test path when you do not want to hit forecast sites.
+- `--remote NAME`, `--branch NAME`: override the default `origin/main`.
+
+The runner records the exact Git commit, national/state SHA-256 values, combined
+data fingerprint, export schema version, deployer version, and deployment time
+as environment values on the ECS task and as CloudFormation outputs.
+
+The generated reader/admin Secrets Manager resources keep the same logical
+CloudFormation identities during ordinary rebuild/update deployments, so the
+reader password and Rhubarb connection URI do not rotate on each data refresh.
 
 ## First deployment
 
@@ -109,7 +149,11 @@ SUBNET_IDS='subnet-a subnet-b' \
 ./election_forecasts_ecs.sh up
 ```
 
-## Normal refresh procedure
+## Lower-level direct refresh procedure
+
+The direct lifecycle refresh remains available for manual maintenance, but it
+does **not** provide the GitHub source-of-truth checks above. Prefer
+`sync_forecast_database.sh` for routine runs.
 
 ```bash
 cd ~/f_collector
@@ -269,7 +313,7 @@ credentials available, and network access to the forecast sources. Example
 cron entry:
 
 ```cron
-20 9 * * * cd /home/USER/f_collector && EFC_CONTACT_EMAIL=you@example.com ./election_forecasts_ecs.sh refresh >> collector.log 2>&1
+20 9 * * * cd /home/USER/f_collector && EFC_CONTACT_EMAIL=you@example.com ./sync_forecast_database.sh >> collector.log 2>&1
 ```
 
 Ready-to-edit examples are included at:

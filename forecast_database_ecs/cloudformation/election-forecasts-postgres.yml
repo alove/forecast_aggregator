@@ -94,6 +94,34 @@ Parameters:
     Type: String
     Default: staging
 
+  ForecastDataGitSha:
+    Type: String
+    Default: manual
+
+  ForecastDataFingerprint:
+    Type: String
+    Default: unknown
+
+  ForecastSchemaVersion:
+    Type: String
+    Default: unknown
+
+  ForecastDeployerVersion:
+    Type: String
+    Default: manual
+
+  ForecastDeployedAt:
+    Type: String
+    Default: unknown
+
+  ForecastNationalSha256:
+    Type: String
+    Default: unknown
+
+  ForecastStateSha256:
+    Type: String
+    Default: unknown
+
 Resources:
   AdminPasswordSecret:
     Type: AWS::SecretsManager::Secret
@@ -333,6 +361,20 @@ Resources:
               Value: --auth-host=scram-sha-256 --auth-local=trust --encoding=UTF8
             - Name: FORECAST_READER_USER
               Value: !Ref ReaderUsername
+            - Name: FORECAST_DATA_GIT_SHA
+              Value: !Ref ForecastDataGitSha
+            - Name: FORECAST_DATA_FINGERPRINT
+              Value: !Ref ForecastDataFingerprint
+            - Name: FORECAST_SCHEMA_VERSION
+              Value: !Ref ForecastSchemaVersion
+            - Name: FORECAST_DEPLOYER_VERSION
+              Value: !Ref ForecastDeployerVersion
+            - Name: FORECAST_DEPLOYED_AT
+              Value: !Ref ForecastDeployedAt
+            - Name: FORECAST_NATIONAL_SHA256
+              Value: !Ref ForecastNationalSha256
+            - Name: FORECAST_STATE_SHA256
+              Value: !Ref ForecastStateSha256
             - Name: TZ
               Value: UTC
           Secrets:
@@ -438,3 +480,24 @@ Outputs:
 
   DeployedImageUri:
     Value: !Ref ImageUri
+
+  ForecastDataGitSha:
+    Value: !Ref ForecastDataGitSha
+
+  ForecastDataFingerprint:
+    Value: !Ref ForecastDataFingerprint
+
+  ForecastSchemaVersion:
+    Value: !Ref ForecastSchemaVersion
+
+  ForecastDeployerVersion:
+    Value: !Ref ForecastDeployerVersion
+
+  ForecastDeployedAt:
+    Value: !Ref ForecastDeployedAt
+
+  ForecastNationalSha256:
+    Value: !Ref ForecastNationalSha256
+
+  ForecastStateSha256:
+    Value: !Ref ForecastStateSha256

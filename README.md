@@ -164,6 +164,50 @@ For a first check of the rendered-source adapter without modifying either CSV:
 
 If Race to the WH changes its Infogram layout, the adapter exits that source with a visible error rather than appending a partial or malformed snapshot. Other selected sources remain independent.
 
+## GitHub-canonical collection and database deployment
+
+For scheduled production use, use `sync_forecast_database.sh` rather than the
+lower-level `election_forecasts_ecs.sh refresh` action. The sync runner makes
+the configured GitHub branch the canonical historical store for the two CSVs.
+
+```bash
+# Normal run: fetch/fast-forward, collect, compare to GitHub, append-only guard,
+# commit/push changed CSVs, and deploy only when AWS data is stale.
+EFC_CONTACT_EMAIL='you@example.com' ./sync_forecast_database.sh
+
+# Report local/GitHub/AWS state without collecting or deploying.
+./sync_forecast_database.sh status
+
+# Recovery/deploy-only path: do not poll vendors; deploy current GitHub data if stale.
+./sync_forecast_database.sh deploy
+
+# Skip all vendor polling, compare the existing CSVs to GitHub, and verify the
+# Git push path. Deploy only if AWS is stale.
+./sync_forecast_database.sh run --skip-collect
+
+# Full deployment-path test without hitting vendor sites: skip collection and
+# force a new image build/ECR push/ECS deployment even when the CSVs are unchanged.
+./sync_forecast_database.sh run --skip-collect --force-deploy
+
+# Rebuild current GitHub data even if AWS already serves the same fingerprint.
+./sync_forecast_database.sh deploy --force-deploy
+```
+
+The runner refuses to operate when the worktree/index contains unexplained
+changes, uses only fast-forward Git synchronization, requires the GitHub CSV
+history to be an exact prefix of the newly collected files, and pushes the
+canonical CSV commit **before** changing AWS. If AWS deployment fails after the
+push, the next run detects the stale deployed fingerprint and retries.
+
+Only these files under `collected_data/` are Git-tracked:
+
+```text
+collected_data/election_forecasts_2026_national.csv
+collected_data/election_forecasts_2026_state.csv
+```
+
+Raw snapshots and lock files remain ignored.
+
 ## Standalone ECS PostgreSQL datasource
 
 The repository includes a deployable read-only PostgreSQL service containing
@@ -212,6 +256,7 @@ Local mode-600 file:
   forecast_database_ecs/.outputs/election_forecasts_connection.env
 ```
 
-The Fargate database is ephemeral; the authoritative append-only files remain
-under `collected_data`. The complete deployment and refresh procedure is in
+The Fargate database is ephemeral; the authoritative append-only history is the
+Git-tracked `collected_data` pair on the configured GitHub branch. The complete
+deployment and refresh procedure is in
 [`forecast_database_ecs/README.md`](forecast_database_ecs/README.md).

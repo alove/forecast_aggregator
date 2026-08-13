@@ -6,8 +6,7 @@
   <string>com.rhubarb.election-forecast-database-refresh</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/replace-me/f_collector/election_forecasts_ecs.sh</string>
-    <string>refresh</string>
+    <string>/Users/replace-me/f_collector/sync_forecast_database.sh</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/replace-me/f_collector</string>

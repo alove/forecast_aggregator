@@ -49,6 +49,16 @@ STAGED_STATE_CSV="$IMAGE_DIR/data/election_forecasts_2026_state.csv"
 CONNECTION_FILE="${CONNECTION_FILE:-$OUTPUT_DIR/election_forecasts_connection.env}"
 CONNECTION_SECRET_NAME="${CONNECTION_SECRET_NAME:-${MY_APP}/${STAGE}/election-forecasts-postgres/DATABASE_URL}"
 
+# Deployment provenance. The GitHub orchestration runner supplies exact values.
+# Direct/manual lifecycle runs remain supported and are labeled accordingly.
+FORECAST_DATA_GIT_SHA="${FORECAST_DATA_GIT_SHA:-manual}"
+FORECAST_DATA_FINGERPRINT="${FORECAST_DATA_FINGERPRINT:-unknown}"
+FORECAST_SCHEMA_VERSION="${FORECAST_SCHEMA_VERSION:-unknown}"
+FORECAST_DEPLOYER_VERSION="${FORECAST_DEPLOYER_VERSION:-manual}"
+FORECAST_DEPLOYED_AT="${FORECAST_DEPLOYED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+FORECAST_NATIONAL_SHA256="${FORECAST_NATIONAL_SHA256:-unknown}"
+FORECAST_STATE_SHA256="${FORECAST_STATE_SHA256:-unknown}"
+
 # Optional networking overrides. Otherwise use the default VPC and the first
 # two public subnets in distinct Availability Zones.
 VPC_ID="${VPC_ID:-}"
@@ -89,6 +99,10 @@ Usage:
   ./$(basename "$0") rebuild      Rebuild/redeploy existing CSVs without polling vendors
   ./$(basename "$0") status       Show stack, ECS service, NLB, and target health
   ./$(basename "$0") connection   Print the read-only PostgreSQL URI
+  ./$(basename "$0") deployed-git-sha  Print the Git commit currently recorded by AWS
+  ./$(basename "$0") deployed-fingerprint Print the data fingerprint currently recorded by AWS
+  ./$(basename "$0") deployed-version  Print the deployer version currently recorded by AWS
+  ./$(basename "$0") deployment-metadata Print Git/data provenance recorded on the ECS task
   ./$(basename "$0") credentials  Print connection components and retrieval locations
   ./$(basename "$0") smoke        Query table/view counts with local psql
   ./$(basename "$0") logs         Follow PostgreSQL logs in CloudWatch
@@ -481,6 +495,13 @@ deploy_stack() {
         "LogGroupName=$LOG_GROUP_NAME" \
         "ApplicationName=$MY_APP" \
         "EnvironmentName=$STAGE" \
+        "ForecastDataGitSha=$FORECAST_DATA_GIT_SHA" \
+        "ForecastDataFingerprint=$FORECAST_DATA_FINGERPRINT" \
+        "ForecastSchemaVersion=$FORECAST_SCHEMA_VERSION" \
+        "ForecastDeployerVersion=$FORECAST_DEPLOYER_VERSION" \
+        "ForecastDeployedAt=$FORECAST_DEPLOYED_AT" \
+        "ForecastNationalSha256=$FORECAST_NATIONAL_SHA256" \
+        "ForecastStateSha256=$FORECAST_STATE_SHA256" \
       --tags \
         "Application=$MY_APP" \
         "Environment=$STAGE" \
@@ -513,6 +534,13 @@ load_outputs() {
   OUTPUT_TG_ARN="$(get_output TargetGroupArn)"
   OUTPUT_LOG_GROUP="$(get_output LogGroupName)"
   OUTPUT_IMAGE_URI="$(get_output DeployedImageUri)"
+  OUTPUT_FORECAST_DATA_GIT_SHA="$(get_output ForecastDataGitSha 2>/dev/null || true)"
+  OUTPUT_FORECAST_DATA_FINGERPRINT="$(get_output ForecastDataFingerprint 2>/dev/null || true)"
+  OUTPUT_FORECAST_SCHEMA_VERSION="$(get_output ForecastSchemaVersion 2>/dev/null || true)"
+  OUTPUT_FORECAST_DEPLOYER_VERSION="$(get_output ForecastDeployerVersion 2>/dev/null || true)"
+  OUTPUT_FORECAST_DEPLOYED_AT="$(get_output ForecastDeployedAt 2>/dev/null || true)"
+  OUTPUT_FORECAST_NATIONAL_SHA256="$(get_output ForecastNationalSha256 2>/dev/null || true)"
+  OUTPUT_FORECAST_STATE_SHA256="$(get_output ForecastStateSha256 2>/dev/null || true)"
 }
 
 build_connection_uri() {
@@ -643,6 +671,60 @@ up() {
   echo
 }
 
+print_deployed_git_sha() {
+  check_aws_tools
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+  if ! stack_exists; then
+    return 0
+  fi
+  local value
+  value="$(get_output ForecastDataGitSha 2>/dev/null || true)"
+  if [ "$value" = "None" ]; then value=""; fi
+  printf '%s\n' "$value"
+}
+
+print_deployed_fingerprint() {
+  check_aws_tools
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+  if ! stack_exists; then return 0; fi
+  local value
+  value="$(get_output ForecastDataFingerprint 2>/dev/null || true)"
+  if [ "$value" = "None" ]; then value=""; fi
+  printf '%s\n' "$value"
+}
+
+print_deployed_version() {
+  check_aws_tools
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+  if ! stack_exists; then return 0; fi
+  local value
+  value="$(get_output ForecastDeployerVersion 2>/dev/null || true)"
+  if [ "$value" = "None" ]; then value=""; fi
+  printf '%s\n' "$value"
+}
+
+print_deployment_metadata() {
+  check_aws_tools
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+  if ! stack_exists; then
+    echo "Stack present: no"
+    return 0
+  fi
+  load_outputs
+  cat <<EOF_METADATA
+Stack present:        yes
+Git SHA:              ${OUTPUT_FORECAST_DATA_GIT_SHA:-unknown}
+Data fingerprint:     ${OUTPUT_FORECAST_DATA_FINGERPRINT:-unknown}
+Schema version:       ${OUTPUT_FORECAST_SCHEMA_VERSION:-unknown}
+Deployer version:     ${OUTPUT_FORECAST_DEPLOYER_VERSION:-unknown}
+Deployed at:          ${OUTPUT_FORECAST_DEPLOYED_AT:-unknown}
+National CSV SHA256:  ${OUTPUT_FORECAST_NATIONAL_SHA256:-unknown}
+State CSV SHA256:     ${OUTPUT_FORECAST_STATE_SHA256:-unknown}
+Image:                $OUTPUT_IMAGE_URI
+Task definition:      $OUTPUT_TASK_DEFINITION
+EOF_METADATA
+}
+
 status() {
   check_aws_tools
   export AWS_DEFAULT_REGION="$AWS_REGION"
@@ -661,6 +743,11 @@ status() {
   printf 'Reader: %s\n' "$OUTPUT_READER_USER"
   printf 'Image: %s\n' "$OUTPUT_IMAGE_URI"
   printf 'Task definition: %s\n' "$OUTPUT_TASK_DEFINITION"
+  printf 'Git SHA: %s\n' "${OUTPUT_FORECAST_DATA_GIT_SHA:-unknown}"
+  printf 'Data fingerprint: %s\n' "${OUTPUT_FORECAST_DATA_FINGERPRINT:-unknown}"
+  printf 'Schema version: %s\n' "${OUTPUT_FORECAST_SCHEMA_VERSION:-unknown}"
+  printf 'Deployer version: %s\n' "${OUTPUT_FORECAST_DEPLOYER_VERSION:-unknown}"
+  printf 'Deployed at: %s\n' "${OUTPUT_FORECAST_DEPLOYED_AT:-unknown}"
   printf 'Connection secret: %s\n\n' "$CONNECTION_SECRET_NAME"
 
   aws ecs describe-services \
@@ -696,15 +783,26 @@ logs() {
 }
 
 smoke() {
-  need psql
   check_aws_tools
   export AWS_DEFAULT_REGION="$AWS_REGION"
   build_connection_uri
-  PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}" psql "$CONNECTION_URI" \
-    --set ON_ERROR_STOP=1 \
-    --command "SELECT current_database() AS database, current_user AS reader, current_setting('transaction_read_only') AS transaction_read_only;" \
-    --command "SELECT 'national' AS dataset, count(*) AS rows, count(DISTINCT vendor) AS vendors, max(rhubarb_pull_time) AS latest_pull FROM public.election_forecasts_2026_national UNION ALL SELECT 'state', count(*), count(DISTINCT vendor), max(rhubarb_pull_time) FROM public.election_forecasts_2026_state;" \
+  local -a commands
+  commands=(
+    --set ON_ERROR_STOP=1
+    --command "SELECT current_database() AS database, current_user AS reader, current_setting('transaction_read_only') AS transaction_read_only;"
+    --command "SELECT 'national' AS dataset, count(*) AS rows, count(DISTINCT vendor) AS vendors, max(rhubarb_pull_time) AS latest_pull FROM public.election_forecasts_2026_national UNION ALL SELECT 'state', count(*), count(DISTINCT vendor), max(rhubarb_pull_time) FROM public.election_forecasts_2026_state;"
     --command "SELECT * FROM public.election_forecasts_2026_load_metadata;"
+  )
+  if command -v psql >/dev/null 2>&1; then
+    PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}" psql "$CONNECTION_URI" "${commands[@]}"
+    return
+  fi
+  need docker
+  warn "Local psql not found; running the smoke test with the official PostgreSQL Docker client"
+  docker run --rm \
+    -e "PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-15}" \
+    postgres:16-bookworm \
+    psql "$CONNECTION_URI" "${commands[@]}"
 }
 
 force_delete_secret() {
@@ -791,6 +889,10 @@ case "$ACTION" in
   down|destroy) down ;;
   status) status ;;
   connection|uri) print_connection ;;
+  deployed-git-sha) print_deployed_git_sha ;;
+  deployed-fingerprint) print_deployed_fingerprint ;;
+  deployed-version) print_deployed_version ;;
+  deployment-metadata|metadata) print_deployment_metadata ;;
   credentials|connection-info) print_credentials ;;
   smoke) smoke ;;
   logs) logs ;;

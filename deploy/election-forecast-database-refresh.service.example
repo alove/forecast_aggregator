@@ -9,4 +9,4 @@ User=replace-me
 WorkingDirectory=/home/replace-me/f_collector
 Environment=EFC_CONTACT_EMAIL=replace-me@example.com
 Environment=AWS_REGION=us-east-2
-ExecStart=/home/replace-me/f_collector/election_forecasts_ecs.sh refresh
+ExecStart=/home/replace-me/f_collector/sync_forecast_database.sh

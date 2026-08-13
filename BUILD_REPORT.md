@@ -1,195 +1,72 @@
-# Build report — f_collector 1.3.0
+# f_collector v1.4.1 build report
 
-## Change delivered
+## Purpose
 
-Added a complete standalone **2026 election forecast PostgreSQL datasource** to
-`f_collector`. It loads the accumulated national and state/district CSV exports
-into one database and mirrors the existing Rhubarb Stack Overflow survey
-pattern:
+Extends the GitHub-canonical collection/deployment workflow with a no-vendor test/recovery path while preserving the existing immutable ECS PostgreSQL architecture.
 
-- dedicated ECR repository;
-- dedicated ECS/Fargate cluster, service, and task definition;
-- internet-facing Network Load Balancer on PostgreSQL TCP/5432;
-- one CloudFormation stack for the complete lifecycle;
-- PostgreSQL-terminated TLS and SCRAM authentication;
-- generated administrator and read-only passwords in AWS Secrets Manager;
-- a fixed Secrets Manager path containing the complete read-only URI;
-- CloudWatch PostgreSQL logs; and
-- immutable image-based refreshes from the complete local append-only history.
+## v1.4.1 test/recovery controls
 
-The originally attached `ecs_examp.zip` contained only an empty directory. The
-implementation was therefore compared against the complete original
-`rhubarb-stackoverflow-survey-ecs` package from the project file library rather
-than reconstructed from memory.
+- `run --skip-collect` performs all GitHub synchronization, CSV hash/history checks, Git push verification, AWS freshness checks, and final repository cleanup without invoking any vendor adapter.
+- When `--skip-collect` finds no CSV diff, an empty Git commit is intentionally not created; `git push` is still executed so remote authentication/pushability is exercised and failure remains loud.
+- `run --skip-collect --force-deploy` additionally forces a fresh PostgreSQL image build, ECR push, ECS deployment, smoke test, and deployment-metadata verification even when the canonical CSV fingerprint is unchanged.
+- The original dirty-worktree, fast-forward-only, append-only history, stable-secret, and GitHub-before-AWS guarantees are unchanged.
 
-## New lifecycle
+## New workflow
 
-The primary command is:
+`sync_forecast_database.sh` now coordinates the routine run:
 
-```bash
-./election_forecasts_ecs.sh ACTION
-```
+1. Requires the `f_collector` repository root, configured branch, and a completely clean Git worktree/index.
+2. Acquires an atomic lock under `.git/` so scheduled runs cannot overlap.
+3. Fetches the configured remote (`origin/main` by default) and only permits a fast-forward local update. A local-ahead or diverged branch fails loudly.
+4. Requires both canonical CSVs to be Git tracked.
+5. Materializes the exact remote CSV bytes with `git show` and then runs the collector locally.
+6. Validates the resulting CSVs and enforces strict append-only history: every GitHub row must remain in the same order at the start of the candidate file.
+7. Computes SHA-256 for both CSVs and a combined fingerprint incorporating export schema version.
+8. Determines the distinct vendors represented in newly appended rows.
+9. If data changed, stages with `git add --all`, permits only the two canonical CSV paths, commits the run, and pushes before AWS deployment.
+10. If the push fails, the unpushed collector commit is discarded and the local branch is restored to the fetched remote state.
+11. Deploys only when the canonical data fingerprint differs from AWS, when the deployer version differs, or when `--force-deploy` is supplied.
+12. Rebuilds the existing immutable PostgreSQL image/service using the exact committed data and existing CloudFormation secret resources.
+13. Runs a read-only database smoke test. If local `psql` is absent, the lifecycle script uses the official PostgreSQL Docker client.
+14. Verifies AWS deployment provenance after deployment and leaves the local Git repository clean and synchronized with the remote.
+15. Removes temporary remote CSV materializations, synchronization locks, and duplicate CSVs from the Docker build context.
 
-Supported actions:
+## GitHub source of truth
 
-```text
-collect
-validate
-stage
-up
-refresh
-rebuild
-status
-connection
-credentials
-smoke
-logs
-down
-```
+`.gitignore` now tracks only:
 
-Compatibility wrappers are included:
+- `collected_data/election_forecasts_2026_national.csv`
+- `collected_data/election_forecasts_2026_state.csv`
 
-```text
-deploy_election_forecasts_ecs.sh
-status_election_forecasts_ecs.sh
-destroy_election_forecasts_ecs.sh
-```
+Other files under `collected_data/`, including raw snapshots, remain ignored.
 
-`up` uses the existing accumulated CSVs and collects only when one is absent.
-`refresh` polls the selected forecast vendors, appends new observations locally,
-validates the complete history, rebuilds the database image without cache, and
-updates the ECS service to the immutable ECR image digest. `rebuild` performs
-the image/database update without polling vendors.
+## ECS deployment provenance
 
-`down` removes only the disposable AWS/database artifacts. It never deletes
-`f_collector/collected_data`.
+Each deployed task now records these environment values and CloudFormation outputs:
 
-## Default resources and connection
+- `FORECAST_DATA_GIT_SHA`
+- `FORECAST_DATA_FINGERPRINT`
+- `FORECAST_SCHEMA_VERSION`
+- `FORECAST_DEPLOYER_VERSION`
+- `FORECAST_DEPLOYED_AT`
+- `FORECAST_NATIONAL_SHA256`
+- `FORECAST_STATE_SHA256`
 
-```text
-AWS region:          us-east-2
-CloudFormation:      rhubarb-staging-election-forecasts-postgres
-ECR repository:      rhubarb/election-forecasts-postgres
-ECS cluster:         rhubarb-staging-election-forecast-cluster
-ECS service:         rhubarb-staging-election-forecast-service
-NLB:                 rhubarb-stg-forecast-nlb
-Database:            election_forecasts
-Read-only user:      rhubarb_forecast_reader
-URI secret:          rhubarb/staging/election-forecasts-postgres/DATABASE_URL
-Local URI file:      forecast_database_ecs/.outputs/election_forecasts_connection.env
-```
+Data freshness is based on the CSV fingerprint plus deployer version; an unrelated Git documentation commit therefore does not force a database rebuild. The exact Git SHA is retained for provenance.
 
-The credential location and user/database names are predictable; the password
-is a generated 40-character secret. The URI includes `sslmode=require`.
+## Credential behavior
 
-## Database objects
+Ordinary rebuild/update deployments reuse the same CloudFormation stack and the same `AdminPasswordSecret` / `ReaderPasswordSecret` logical resources. The sync runner does not tear down or recreate these resources, so routine data refreshes do not intentionally rotate the Rhubarb reader credentials or fixed connection-secret path.
 
-```text
-public.election_forecasts_2026_national
-public.election_forecasts_2026_state
-public.election_forecasts_2026_load_metadata
-public.election_forecasts_2026_latest_national
-public.election_forecasts_2026_latest_state
-public.election_forecasts_2026_latest_vendor_runs
-```
+## Validation completed
 
-The base tables preserve the complete local append-only history present at
-build time. `state_fips` and four-character `congressional_district`/SFCD values
-are stored as PostgreSQL `TEXT`, preserving leading zeroes. The latest views use
-vendor, metric/race identity, forecast date, provider update time, pull time,
-and run ID to select the newest published observation.
+- Python unit/integration suite: **47/47 PASS**.
+- Includes temporary bare-Git remote integration tests exercising fetch, append-only collection, commit/push ordering, deployment metadata, idempotent reruns, clean final repository state, and `--skip-collect --force-deploy` without vendor calls.
+- Dirty-worktree test confirms the collector is never run when unexplained local changes exist.
+- History-guard test confirms modification/reordering of prior GitHub CSV rows is rejected.
+- Bash syntax validation passes for lifecycle, sync, wrappers, local loader, and PostgreSQL init scripts.
+- Python compilation passes for collector, source adapters, database preparer, and Git history guard.
+- CloudFormation YAML parses successfully with 12 resources and 19 outputs; all seven forecast provenance environment variables are present on the task definition.
+- Existing sample database preparation remains valid: 48 national rows and 8,460 state/district rows.
 
-The load metadata records source paths, SHA-256 hashes, byte sizes, row counts,
-vendor counts, vendor-run counts, pull-time range, export schema version, and
-load time.
-
-## Security behavior
-
-- Only `rhubarb_forecast_reader` is remotely accepted by `pg_hba.conf`.
-- Remote connections require TLS and SCRAM-SHA-256.
-- Every other TLS or clear-text remote PostgreSQL login is rejected.
-- The reader has `CONNECT`, schema `USAGE`, and `SELECT` only.
-- Public database and schema creation privileges are revoked.
-- The reader defaults to read-only transactions and has statement and idle
-  transaction timeouts.
-- The administrator password is injected into the task but is not exposed as a
-  public connection URI.
-- The default public ingress remains `0.0.0.0/0` to match the reference survey
-  deployment, but the script warns prominently and supports `ALLOWED_CIDR`.
-
-PostgreSQL uses a task-local self-signed certificate. `sslmode=require` encrypts
-traffic but does not authenticate the endpoint certificate; a narrower ingress
-CIDR should be used whenever Rhubarb's stable egress range is known.
-
-## Data preparation
-
-Added a standard-library-only validator and PostgreSQL bundle generator:
-
-```text
-forecast_database_ecs/image/prepare_election_forecasts.py
-```
-
-It requires export schema `2.0.0`, validates all timestamps, metric types,
-parties, units, values, dates, booleans, geography identifiers, and unique
-export identities, then generates:
-
-```text
-10-schema.sql
-20-load.sql
-30-post-load.sql
-election_forecasts_2026_national.csv
-election_forecasts_2026_state.csv
-manifest.json
-```
-
-Prepared CSVs use unquoted empty fields so PostgreSQL `COPY ... NULL ''`
-correctly loads optional dates, timestamps, numerics, and booleans as SQL
-`NULL` rather than attempting to cast quoted empty strings.
-
-## Local PostgreSQL loader
-
-A separate optional loader is included:
-
-```text
-forecast_database_ecs/setup_local_loader.sh
-load_election_forecasts_local.sh
-load_election_forecasts_local.py
-```
-
-It uses a dedicated `forecast_database_ecs/.venv` and `psycopg`, leaving the
-collector's standard-library-only environment unchanged. It defaults to the
-local Rhubarb Docker PostgreSQL endpoint at `127.0.0.1:5434/postgres` and uses
-only `ELECTION_FORECASTS_DATABASE_URL` as its URI environment override.
-
-## Verification completed
-
-- Python compilation: **PASS**
-- Bash syntax validation for every shell script: **PASS**
-- Unit and fixture-integration suite: **39/39 PASS**
-- Sample national validation: **48 rows, 3 vendors, 3 vendor runs**
-- Sample state/district validation: **8,460 rows, 3 vendors, 3 vendor runs**
-- PostgreSQL schema/load/view generation: **PASS**
-- Leading-zero FIPS and SFCD preservation: **PASS**
-- Quoted-empty/SQL-NULL regression check: **PASS**
-- Local-loader `--validate-only`: **PASS**
-- CloudFormation YAML composition and structural audit: **PASS**
-- Collector Docker/Compose split-output regression check: **PASS**
-- Mocked full `up` lifecycle across AWS CLI, ECR, Docker buildx, CloudFormation,
-  Secrets Manager, and connection-file generation: **PASS (42 external calls)**
-- Clean release extraction, virtual-environment creation, test execution, and
-  executable-bit check: **PASS**
-
-## Environment limitation
-
-No real AWS credentials or Docker daemon were available in the build
-container, so this report does **not** claim that a live ECR image was built or a
-real AWS stack was created here. The complete non-AWS data path and a mocked
-end-to-end deployment path were exercised. The first real deployment should be
-run from the authenticated Mac/Linux host with:
-
-```bash
-cd ~/f_collector
-./election_forecasts_ecs.sh validate
-./election_forecasts_ecs.sh up
-./election_forecasts_ecs.sh smoke
-```
+A real AWS deployment was not performed in the build environment because it does not have the user's AWS credentials or local Docker daemon. The existing ECS lifecycle remains the deployment mechanism and is exercised by the repository tests plus the Git/AWS orchestration stubs.

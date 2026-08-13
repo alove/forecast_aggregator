@@ -7,10 +7,12 @@ __pycache__/
 *.lock
 .env
 collector.log
-collected_data/
-election_forecasts_2026.csv
-election_forecasts_2026_national.csv
-election_forecasts_2026_state.csv
+collected_data/*
+!collected_data/election_forecasts_2026_national.csv
+!collected_data/election_forecasts_2026_state.csv
+/election_forecasts_2026.csv
+/election_forecasts_2026_national.csv
+/election_forecasts_2026_state.csv
 raw_snapshots/
 .live_sources/
 build/
