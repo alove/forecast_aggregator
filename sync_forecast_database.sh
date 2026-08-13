@@ -261,19 +261,29 @@ require_tracked_csvs() {
       fail "$path is not tracked by Git. Commit the canonical CSVs to $REMOTE/$BRANCH first."
       exit 6
     }
-    [ -s "$SCRIPT_DIR/$path" ] || { fail "Tracked CSV is missing or empty: $path"; exit 6; }
+    [ -s "$SCRIPT_DIR/$path" ] || {
+      fail "Tracked CSV is missing or empty: $path"
+      exit 6
+    }
   done
 }
 
-mkdir -p "$HOME/.cache/f_collector/tmp"
-TEMP_DIR="$(mktemp -d "$HOME/.cache/f_collector/tmp/forecast-sync.XXXXXX")"
-  git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$NATIONAL_REL" > "$TEMP_DIR/remote_national.csv" || {
-    fail "Cannot read $NATIONAL_REL from $REMOTE/$BRANCH"; exit 6;
-  }
-  git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$STATE_REL" > "$TEMP_DIR/remote_state.csv" || {
-    fail "Cannot read $STATE_REL from $REMOTE/$BRANCH"; exit 6;
-  }
+materialize_remote_csvs() {
+  mkdir -p "$HOME/.cache/f_collector/tmp"
+  TEMP_DIR="$(mktemp -d "$HOME/.cache/f_collector/tmp/forecast-sync.XXXXXX")"
 
+  git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$NATIONAL_REL" \
+    > "$TEMP_DIR/remote_national.csv" || {
+      fail "Cannot read $NATIONAL_REL from $REMOTE/$BRANCH"
+      exit 6
+    }
+
+  git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$STATE_REL" \
+    > "$TEMP_DIR/remote_state.csv" || {
+      fail "Cannot read $STATE_REL from $REMOTE/$BRANCH"
+      exit 6
+    }
+}
 
 run_collector() {
   local -a args
