@@ -287,7 +287,7 @@ materialize_remote_csvs() {
 
 run_collector() {
   local -a args
-  args=("$COLLECTOR" collect --output-dir "$DATA_DIR")
+  args=("$COLLECTOR" collect --output-dir "$DATA_DIR" --allow-partial-success)
   if [ "$SAVE_RAW" = "true" ]; then args+=(--save-raw); fi
   local source
   for source in "${COLLECT_SOURCES[@]}"; do args+=(--source "$source"); done
