@@ -265,15 +265,15 @@ require_tracked_csvs() {
   done
 }
 
-materialize_remote_csvs() {
-  TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forecast-sync.XXXXXX")"
+mkdir -p "$HOME/.cache/f_collector/tmp"
+TEMP_DIR="$(mktemp -d "$HOME/.cache/f_collector/tmp/forecast-sync.XXXXXX")"
   git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$NATIONAL_REL" > "$TEMP_DIR/remote_national.csv" || {
     fail "Cannot read $NATIONAL_REL from $REMOTE/$BRANCH"; exit 6;
   }
   git -C "$SCRIPT_DIR" show "$REMOTE/$BRANCH:$STATE_REL" > "$TEMP_DIR/remote_state.csv" || {
     fail "Cannot read $STATE_REL from $REMOTE/$BRANCH"; exit 6;
   }
-}
+
 
 run_collector() {
   local -a args
@@ -403,7 +403,8 @@ verify_push_path_without_commit() {
 canonical_metadata_from_tracked_files() {
   # Materialize HEAD as the remote baseline and compare it to itself to derive exact SHAs/version.
   rm -rf "$TEMP_DIR"
-  TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forecast-sync.XXXXXX")"
+mkdir -p "$HOME/.cache/f_collector/tmp"
+TEMP_DIR="$(mktemp -d "$HOME/.cache/f_collector/tmp/forecast-sync.XXXXXX")"
   git -C "$SCRIPT_DIR" show "HEAD:$NATIONAL_REL" > "$TEMP_DIR/remote_national.csv"
   git -C "$SCRIPT_DIR" show "HEAD:$STATE_REL" > "$TEMP_DIR/remote_state.csv"
   load_comparison
