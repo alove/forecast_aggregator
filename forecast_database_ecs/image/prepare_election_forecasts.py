@@ -21,7 +21,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-SCHEMA_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.1.0"
 
 NATIONAL_TABLE = "election_forecasts_2026_national"
 STATE_TABLE = "election_forecasts_2026_state"
@@ -51,6 +51,7 @@ SHARED_FIELDS = [
     "basis",
     "source_record_id",
     "source_url",
+    "model_web_url",
     "source_file",
     "data_quality",
     "notes",
@@ -257,6 +258,8 @@ def validate_shared(row: dict[str, str], *, row_number: int) -> tuple[datetime, 
     require(row, "party", row_number=row_number)
     require(row, "unit", row_number=row_number)
     require(row, "source_record_id", row_number=row_number)
+    require(row, "source_url", row_number=row_number)
+    require(row, "model_web_url", row_number=row_number)
     parse_number(row["value"], field="value", row_number=row_number, required=True)
 
     for field in ("median_value", "low_value", "high_value"):
@@ -496,6 +499,7 @@ def shared_columns_sql() -> str:
     basis TEXT,
     source_record_id TEXT NOT NULL,
     source_url TEXT,
+    model_web_url TEXT NOT NULL,
     source_file TEXT,
     data_quality TEXT,
     notes TEXT""".strip()
@@ -655,19 +659,19 @@ CREATE VIEW public.{quote_ident(LATEST_RUNS_VIEW)} AS
 WITH all_runs AS (
     SELECT DISTINCT
            vendor, vendor_model, vendor_run_id, vendor_forecast_date,
-           vendor_updated_at_utc, rhubarb_pull_time, source_url,
+           vendor_updated_at_utc, rhubarb_pull_time, source_url, model_web_url,
            'national'::TEXT AS source_table
     FROM public.{quote_ident(NATIONAL_TABLE)}
     UNION
     SELECT DISTINCT
            vendor, vendor_model, vendor_run_id, vendor_forecast_date,
-           vendor_updated_at_utc, rhubarb_pull_time, source_url,
+           vendor_updated_at_utc, rhubarb_pull_time, source_url, model_web_url,
            'state'::TEXT AS source_table
     FROM public.{quote_ident(STATE_TABLE)}
 )
 SELECT DISTINCT ON (vendor, source_table)
        vendor, vendor_model, vendor_run_id, vendor_forecast_date,
-       vendor_updated_at_utc, rhubarb_pull_time, source_url, source_table
+       vendor_updated_at_utc, rhubarb_pull_time, source_url, model_web_url, source_table
 FROM all_runs
 ORDER BY
     vendor,
@@ -676,7 +680,8 @@ ORDER BY
     vendor_updated_at_utc DESC NULLS LAST,
     rhubarb_pull_time DESC,
     vendor_run_id DESC,
-    source_url DESC NULLS LAST;
+    source_url DESC NULLS LAST,
+    model_web_url DESC NULLS LAST;
 
 INSERT INTO public.{quote_ident(METADATA_TABLE)} (
     loaded_at_utc,

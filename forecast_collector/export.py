@@ -5,8 +5,9 @@ from math import isfinite
 from typing import Any, Iterable
 
 from .errors import OutputValidationError
+from .model_links import model_web_url_for
 
-EXPORT_SCHEMA_VERSION = "2.0.0"
+EXPORT_SCHEMA_VERSION = "2.1.0"
 
 COMMON_FIELDS = [
     "schema_version",
@@ -29,6 +30,7 @@ COMMON_FIELDS = [
     "basis",
     "source_record_id",
     "source_url",
+    "model_web_url",
     "source_file",
     "data_quality",
     "notes",
@@ -95,6 +97,7 @@ def _common(source: dict[str, Any], metric_type: str, party: str, value: Any, un
         "unit": unit,
         "source_record_id": source.get("source_record_id", ""),
         "source_url": source.get("source_url", ""),
+        "model_web_url": model_web_url_for(str(source.get("vendor", "")), metric_type),
         "source_file": source.get("source_file", ""),
         "data_quality": source.get("data_quality", ""),
         "notes": source.get("notes", ""),
@@ -271,7 +274,7 @@ def _validate_common(rows: Iterable[dict[str, Any]], fieldnames: list[str], metr
         missing = [field for field in fieldnames if field not in row]
         if missing:
             raise OutputValidationError(f"row {index} missing export columns: {', '.join(missing[:5])}")
-        for field in ("schema_version", "rhubarb_pull_time", "vendor", "vendor_run_id", "metric_type", "value", "unit", "source_record_id", "source_url"):
+        for field in ("schema_version", "rhubarb_pull_time", "vendor", "vendor_run_id", "metric_type", "value", "unit", "source_record_id", "source_url", "model_web_url"):
             if row.get(field, "") in (None, ""):
                 raise OutputValidationError(f"row {index} has blank required field {field}")
         if row["schema_version"] != EXPORT_SCHEMA_VERSION:

@@ -382,6 +382,54 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
             35,
         )
 
+    def test_missing_house_district_table_preserves_national_and_senate_data(self):
+        house = infogram_payload(
+            chart(
+                "National House Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "73%", "231"],
+                    ["Republicans", "27%", "204"],
+                ],
+            ),
+            chart(
+                "National House Popular Vote Projection",
+                [["Metric", "Projection"], ["House Popular Vote", "D+7"]],
+            ),
+        )
+        senate = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "54%", "51"],
+                    ["Republicans", "46%", "49"],
+                ],
+            ),
+            chart(
+                "Senate Race Forecast",
+                [
+                    ["State", "Democratic Win Probability", "Republican Win Probability", "Projected Margin"],
+                    ["Georgia", "61%", "39%", "D+2.4"],
+                ],
+            ),
+        )
+        rows, _, _, diagnostics = RaceToTheWHSource().normalize_infograms(
+            house, senate,
+            observed_datetime_utc="2026-08-14T14:03:27+00:00",
+            include_house_districts=True, include_senate_races=True,
+            require_complete_counts=True,
+        )
+        self.assertTrue(diagnostics["partial"])
+        self.assertIn("House district forecasts: 0/435 readable", diagnostics["partial_sections"])
+        national = next(row for row in rows if row["row_type"] == "national")
+        self.assertEqual(national["house_seats_d"], 231.0)
+        self.assertEqual(national["house_popular_vote_margin_d_minus_r_pct"], 7.0)
+        self.assertEqual(national["senate_seats_d"], 51.0)
+        senate_rows = [row for row in rows if row["row_type"] == "senate_race"]
+        self.assertEqual(len(senate_rows), 1)
+        self.assertEqual(validate_rows(rows), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

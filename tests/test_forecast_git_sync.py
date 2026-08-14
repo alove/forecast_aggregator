@@ -168,7 +168,7 @@ class SyncIntegrationTests(unittest.TestCase):
             self.assertIn("updates from 1 vendors", self.git(repo, "log", "-1", "--pretty=%s").stdout)
             state = (repo / ".git" / "fake_deploy.env").read_text().splitlines()
             self.assertEqual(state[0], local_head)
-            self.assertEqual(state[2], "1.4.1")
+            self.assertEqual(state[2], "1.5.0")
             second = subprocess.run(["bash", "./sync_forecast_database.sh"], cwd=repo, text=True, capture_output=True, check=False)
             self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
             self.assertIn("no changes relative", second.stdout)
@@ -200,7 +200,7 @@ class SyncIntegrationTests(unittest.TestCase):
             self.assertEqual(remote_head, initial_head)
             state = (repo / ".git" / "fake_deploy.env").read_text().splitlines()
             self.assertEqual(state[0], initial_head)
-            self.assertEqual(state[2], "1.4.1")
+            self.assertEqual(state[2], "1.5.0")
             self.assertEqual(self.git(repo, "status", "--porcelain").stdout, "")
 
     def test_dirty_repo_fails_before_collection(self):

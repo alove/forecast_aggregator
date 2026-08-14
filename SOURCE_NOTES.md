@@ -1,4 +1,4 @@
-# Source implementation notes — August 12, 2026
+# Source implementation notes — August 14, 2026
 
 ## Enabled
 
@@ -47,17 +47,11 @@ Publisher pages:
 
 The House and Senate pages publish the current forecasts through public Infogram embeds. The adapter first discovers the current forecast embed on each publisher page, distinguishing it from the polling graphics that also appear on those pages. It then parses the static `window.infographicData` payload delivered by the public Infogram embed.
 
-The parser supports both Infogram structures seen in public projects: modern `props.chartData` entities and the legacy `elements[]` chart structure with direct `data` and `sheetnames` fields. Tables are selected semantically rather than by fragile element IDs. The normalized snapshot must include:
+The parser supports both Infogram structures seen in public projects: modern `props.chartData` entities and the legacy `elements[]` chart structure with direct `data` and `sheetnames` fields. Tables are selected semantically rather than by fragile element IDs. National House metrics, national Senate metrics, House district forecasts, and Senate race forecasts are parsed as independent sections. If one section changes or disappears, readable sections are retained and the source is reported as `[PARTIAL]` with explicit coverage diagnostics.
 
-- House projected seats and chamber-control probabilities;
-- Senate projected seats and chamber-control probabilities;
-- the national House popular-vote projection;
-- exactly 435 House district forecasts; and
-- exactly 35 Senate race forecasts.
+A House expected-seat projection is derived from district probabilities only when all 435 districts are readable; it is never inferred from a partial race table. The published House popular-vote figure is labeled as Race to the WH's adjusted two-party projection because the provider's methodology imputes uncontested districts.
 
-If a national seat figure is not separately displayed, the House expected-seat projection can be derived only from a complete set of all 435 published district probabilities. The adapter does not infer a national metric from a partial race table. The published House popular-vote figure is labeled as Race to the WH's adjusted two-party projection because the provider's methodology imputes uncontested districts.
-
-The current public embed IDs are retained as fallbacks, but the normal path discovers the embeds from the publisher pages on every run. Raw mode saves both landing pages, both exact Infogram responses, and an extracted-table diagnostic file. Any missing metric, conflicting race record, or incomplete race count fails the source before CSV append.
+The current public embed IDs are retained as fallbacks, but the normal path discovers the embeds from the publisher pages on every run. Raw mode saves both landing pages, both exact Infogram responses, and an extracted-table diagnostic file. A source fails completely only when no usable forecast metric or race section can be identified; incomplete sections no longer discard valid sections.
 
 ## Deliberately not enabled yet
 

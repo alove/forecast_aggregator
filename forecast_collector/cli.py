@@ -180,7 +180,13 @@ def command_collect(args: argparse.Namespace) -> int:
                     f"{forecast_dates[0]} through {forecast_dates[-1]}; "
                     f"{len(forecast_dates):,} dates"
                 )
-            print(f"[PASS] {result.source_name}: {len(result.rows):,} normalized source rows ({date_summary})")
+            partial = bool(result.details.get("partial"))
+            status = "PARTIAL" if partial else "PASS"
+            print(f"[{status}] {result.source_name}: {len(result.rows):,} normalized source rows ({date_summary})")
+            if partial:
+                sections = list(result.details.get("partial_sections", []))
+                if sections:
+                    print("          " + "; ".join(str(item) for item in sections))
             collapsed = result.details.get("duplicate_rows_collapsed", {})
             if args.verbose and collapsed:
                 print(f"       exact source duplicates collapsed: {collapsed}")

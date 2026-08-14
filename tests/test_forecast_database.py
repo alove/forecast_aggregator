@@ -70,6 +70,7 @@ class ForecastDatabasePreparerTests(unittest.TestCase):
             load_sql = (output / "20-load.sql").read_text(encoding="utf-8")
             self.assertIn("election_forecasts_2026_national", schema_sql)
             self.assertIn("election_forecasts_2026_state", schema_sql)
+            self.assertIn("model_web_url TEXT NOT NULL", schema_sql)
             self.assertIn("election_forecasts_2026_latest_national", post_sql)
             self.assertIn("election_forecasts_2026_latest_state", post_sql)
             self.assertIn("election_forecasts_2026_latest_vendor_runs", post_sql)
@@ -97,6 +98,8 @@ class ForecastDatabasePreparerTests(unittest.TestCase):
             state_header = reader.fieldnames
         self.assertEqual(national_header, self.preparer.NATIONAL_FIELDS)
         self.assertEqual(state_header, self.preparer.STATE_FIELDS)
+        self.assertEqual(self.preparer.SCHEMA_VERSION, "2.1.0")
+        self.assertTrue(all(row["model_web_url"] for row in state_rows))
         self.assertTrue(any(row["state_fips"] == "01" for row in state_rows))
         self.assertTrue(any(row["congressional_district"] == "0101" for row in state_rows))
 

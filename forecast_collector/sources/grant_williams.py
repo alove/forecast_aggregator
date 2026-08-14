@@ -119,9 +119,34 @@ class GrantWilliamsSource(ForecastSource):
         senate_control_d = pct_from_unit(ss["prob_dem_control"])
         senate_control_r = pct_from_unit(ss["prob_rep_control"])
         election_day = house.get("national_model", {}).get("election_day", {})
-        national_margin = rounded(election_day.get("mean", hs["national_environment"]))
+        national_margin_raw = election_day.get("mean")
+        if national_margin_raw in (None, ""):
+            national_margin_raw = hs.get("election_day_national_margin")
+        if national_margin_raw in (None, ""):
+            legacy_environment = house.get("national_environment", {})
+            if isinstance(legacy_environment, dict):
+                legacy_election_day = legacy_environment.get("election_day", {})
+                if isinstance(legacy_election_day, dict):
+                    national_margin_raw = legacy_election_day.get("mean")
+        if national_margin_raw in (None, ""):
+            national_margin_raw = hs.get("national_environment")
+        if national_margin_raw in (None, ""):
+            raise SourceFormatError(
+                "Grant Williams bundle is missing the election-day national House margin"
+            )
+        national_margin = rounded(national_margin_raw)
         house_vote_d, house_vote_r, house_vote_o = pct_from_margin_dem(national_margin)
         election_day_ci = election_day.get("ci_90", ["", ""])
+        if not isinstance(election_day_ci, list) or len(election_day_ci) < 2:
+            legacy_environment = house.get("national_environment", {})
+            legacy_election_day = (
+                legacy_environment.get("election_day", {})
+                if isinstance(legacy_environment, dict) else {}
+            )
+            election_day_ci = (
+                legacy_election_day.get("ci_90", ["", ""])
+                if isinstance(legacy_election_day, dict) else ["", ""]
+            )
         if not isinstance(election_day_ci, list) or len(election_day_ci) < 2:
             election_day_ci = ["", ""]
         vote_low = pct_from_margin_dem(election_day_ci[0])[0] if election_day_ci[0] != "" else ""

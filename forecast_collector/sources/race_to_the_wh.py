@@ -161,7 +161,11 @@ class RaceToTheWHSource(ForecastSource):
             details={
                 "forecast_dates": [forecast_date] if forecast_date else [],
                 "run_ids": [run_id],
-                "model_status": "published",
+                "model_status": "published_partial" if diagnostics.get("partial") else "published",
+                "partial": bool(diagnostics.get("partial")),
+                "partial_sections": list(diagnostics.get("partial_sections", [])),
+                "house_record_count": diagnostics.get("house_record_count", 0),
+                "senate_record_count": diagnostics.get("senate_record_count", 0),
                 "house_embed_url": house_embed_url,
                 "senate_embed_url": senate_embed_url,
             },
@@ -405,32 +409,30 @@ class RaceToTheWHSource(ForecastSource):
         senate_embed_url = senate_embed_url or self.fallback_senate_embed_url
         house_tables = extract_infogram_tables(house_payload)
         senate_tables = extract_infogram_tables(senate_payload)
-        if not house_tables:
-            raise SourceFormatError("Race to the WH House Infogram contains no readable chart tables")
-        if not senate_tables:
-            raise SourceFormatError("Race to the WH Senate Infogram contains no readable chart tables")
+        if not house_tables and not senate_tables:
+            raise SourceFormatError(
+                "Race to the WH House and Senate Infograms contain no readable chart tables"
+            )
 
         house_texts = collect_context_strings(house_payload)
         senate_texts = collect_context_strings(senate_payload)
         vendor_updated_at_utc = latest_payload_timestamp(house_payload, senate_payload)
+
+        # Race-level and national sections are intentionally independent.  A
+        # publisher layout change that hides the 435-district table must not
+        # discard still-readable national House/Senate projections (and vice
+        # versa).  Coverage is reported as partial below instead of raising.
         house_records = select_house_records(
-            house_tables,
-            require_complete_counts=require_complete_counts and include_house_districts,
-        )
+            house_tables, require_complete_counts=False
+        ) if house_tables else {}
         senate_records = select_senate_records(
-            senate_tables,
-            require_complete_counts=require_complete_counts and include_senate_races,
-        )
+            senate_tables, require_complete_counts=False
+        ) if senate_tables else {}
 
         house_seats = extract_party_metric(
             house_tables, house_texts, metric="seats", chamber="house", chamber_size=435
         )
-        if house_seats is None and house_records:
-            if len(house_records) != 435:
-                raise SourceFormatError(
-                    "cannot derive expected House seats because not all 435 district "
-                    f"forecasts were identified (found {len(house_records)})"
-                )
+        if house_seats is None and len(house_records) == 435:
             d_expected = sum(float(record.d_probability) for record in house_records.values()) / 100.0
             r_expected = sum(float(record.r_probability) for record in house_records.values()) / 100.0
             o_expected = 435.0 - d_expected - r_expected
@@ -451,7 +453,7 @@ class RaceToTheWHSource(ForecastSource):
             senate_tables, senate_texts, metric="control", chamber="senate", chamber_size=100
         )
 
-        missing = []
+        missing_national = []
         for label, value in (
             ("House seat projection", house_seats),
             ("House control probability", house_control),
@@ -460,28 +462,35 @@ class RaceToTheWHSource(ForecastSource):
             ("Senate control probability", senate_control),
         ):
             if value is None:
-                missing.append(label)
-        if missing:
-            raise SourceFormatError(
-                "Race to the WH Infogram layout was readable but required national metrics "
-                f"could not be identified: {', '.join(missing)}"
+                missing_national.append(label)
+
+        partial_sections: list[str] = []
+        if missing_national:
+            partial_sections.append("missing national metrics: " + ", ".join(missing_national))
+        if include_house_districts and len(house_records) != 435:
+            partial_sections.append(
+                f"House district forecasts: {len(house_records)}/435 readable"
+            )
+        if include_senate_races and len(senate_records) != 35:
+            partial_sections.append(
+                f"Senate race forecasts: {len(senate_records)}/35 readable"
             )
 
-        assert house_seats is not None
-        assert house_control is not None
-        assert house_vote is not None
-        assert senate_seats is not None
-        assert senate_control is not None
+        national_metrics = [house_seats, house_control, house_vote, senate_seats, senate_control]
+        if not any(value is not None for value in national_metrics) and not house_records and not senate_records:
+            raise SourceFormatError(
+                "Race to the WH Infograms were readable but no usable forecast metrics or races were identified"
+            )
         forecast_date = extract_forecast_date(house_texts + senate_texts)
         if not forecast_date and vendor_updated_at_utc:
             forecast_date = vendor_updated_at_utc[:10]
 
         canonical = {
-            "house_seats": _without_context(house_seats),
-            "house_control": _without_context(house_control),
-            "house_vote": _without_context(house_vote),
-            "senate_seats": _without_context(senate_seats),
-            "senate_control": _without_context(senate_control),
+            "house_seats": _without_context(house_seats or {}),
+            "house_control": _without_context(house_control or {}),
+            "house_vote": _without_context(house_vote or {}),
+            "senate_seats": _without_context(senate_seats or {}),
+            "senate_control": _without_context(senate_control or {}),
             "house_records": [record_to_canonical(record) for record in sorted(
                 house_records.values(), key=lambda item: item.source_record_id
             )],
@@ -494,6 +503,9 @@ class RaceToTheWHSource(ForecastSource):
         ).hexdigest()[:20]
         run_id = f"race-to-the-wh-{forecast_date or 'undated'}-{digest}"
 
+        def metric_value(metric: dict[str, Any] | None, key: str) -> Any:
+            return metric.get(key, "") if isinstance(metric, dict) else ""
+
         common = {
             "observed_datetime_utc": observed_datetime_utc,
             "vendor": self.name,
@@ -501,45 +513,52 @@ class RaceToTheWHSource(ForecastSource):
             "vendor_run_id": run_id,
             "vendor_forecast_date": forecast_date,
             "vendor_updated_at_utc": vendor_updated_at_utc,
-            "model_status": "published",
+            "model_status": "published_partial" if partial_sections else "published",
             "election_date": "2026-11-03",
-            "house_seats_basis": str(house_seats.get("context", "published projected seats")),
-            "house_seats_d": house_seats["D"],
-            "house_seats_r": house_seats["R"],
-            "house_seats_other": house_seats["Other"],
-            "house_control_d_pct": house_control["D"],
-            "house_control_r_pct": house_control["R"],
-            "house_control_other_pct": house_control["Other"],
+            "house_seats_basis": str(metric_value(house_seats, "context") or "published projected seats"),
+            "house_seats_d": metric_value(house_seats, "D"),
+            "house_seats_r": metric_value(house_seats, "R"),
+            "house_seats_other": metric_value(house_seats, "Other"),
+            "house_control_d_pct": metric_value(house_control, "D"),
+            "house_control_r_pct": metric_value(house_control, "R"),
+            "house_control_other_pct": metric_value(house_control, "Other"),
             "house_popular_vote_basis": (
                 "Race to the WH adjusted two-party national House vote projection; "
                 "uncontested districts are imputed by the provider"
-            ),
-            "house_popular_vote_d_pct": house_vote["D"],
-            "house_popular_vote_r_pct": house_vote["R"],
-            "house_popular_vote_other_pct": house_vote["Other"],
-            "house_popular_vote_margin_d_minus_r_pct": house_vote["margin"],
-            "senate_seats_basis": str(senate_seats.get("context", "published projected caucus seats")),
-            "senate_seats_d": senate_seats["D"],
-            "senate_seats_r": senate_seats["R"],
-            "senate_seats_other": senate_seats["Other"],
-            "senate_control_d_pct": senate_control["D"],
-            "senate_control_r_pct": senate_control["R"],
-            "senate_control_other_pct": senate_control["Other"],
+            ) if house_vote is not None else "",
+            "house_popular_vote_d_pct": metric_value(house_vote, "D"),
+            "house_popular_vote_r_pct": metric_value(house_vote, "R"),
+            "house_popular_vote_other_pct": metric_value(house_vote, "Other"),
+            "house_popular_vote_margin_d_minus_r_pct": metric_value(house_vote, "margin"),
+            "senate_seats_basis": str(metric_value(senate_seats, "context") or "published projected caucus seats"),
+            "senate_seats_d": metric_value(senate_seats, "D"),
+            "senate_seats_r": metric_value(senate_seats, "R"),
+            "senate_seats_other": metric_value(senate_seats, "Other"),
+            "senate_control_d_pct": metric_value(senate_control, "D"),
+            "senate_control_r_pct": metric_value(senate_control, "R"),
+            "senate_control_other_pct": metric_value(senate_control, "Other"),
         }
-        national = blank_row()
-        national.update(common)
-        national.update({
-            "row_type": "national",
-            "source_record_id": "national",
-            "source_url": self.house_page_url,
-            "source_file": "House and Senate public Infogram embeds",
-            "data_quality": "strict semantic parse of public Infogram data tables",
-            "notes": (
-                f"house_embed={house_embed_url}; senate_embed={senate_embed_url}; "
-                f"house_tables={len(house_tables)}; senate_tables={len(senate_tables)}"
-            ),
-        })
-        result: list[dict[str, Any]] = [national]
+        result: list[dict[str, Any]] = []
+        if any(value is not None for value in national_metrics):
+            national = blank_row()
+            national.update(common)
+            national.update({
+                "row_type": "national",
+                "source_record_id": "national",
+                "source_url": self.house_page_url,
+                "source_file": "House and Senate public Infogram embeds",
+                "data_quality": (
+                    "partial semantic parse of public Infogram data tables"
+                    if partial_sections else
+                    "strict semantic parse of public Infogram data tables"
+                ),
+                "notes": (
+                    f"house_embed={house_embed_url}; senate_embed={senate_embed_url}; "
+                    f"house_tables={len(house_tables)}; senate_tables={len(senate_tables)}; "
+                    f"partial_sections={' | '.join(partial_sections) if partial_sections else 'none'}"
+                ),
+            })
+            result.append(national)
 
         if include_house_districts:
             for record in sorted(house_records.values(), key=lambda item: item.source_record_id):
@@ -606,12 +625,16 @@ class RaceToTheWHSource(ForecastSource):
             "run_id": run_id,
             "forecast_date": forecast_date,
             "vendor_updated_at_utc": vendor_updated_at_utc,
+            "partial": bool(partial_sections),
+            "partial_sections": partial_sections,
+            "house_record_count": len(house_records),
+            "senate_record_count": len(senate_records),
             "national": canonical | {
-                "house_seats_context": house_seats.get("context", ""),
-                "house_control_context": house_control.get("context", ""),
-                "house_vote_context": house_vote.get("context", ""),
-                "senate_seats_context": senate_seats.get("context", ""),
-                "senate_control_context": senate_control.get("context", ""),
+                "house_seats_context": metric_value(house_seats, "context"),
+                "house_control_context": metric_value(house_control, "context"),
+                "house_vote_context": metric_value(house_vote, "context"),
+                "senate_seats_context": metric_value(senate_seats, "context"),
+                "senate_control_context": metric_value(senate_control, "context"),
             },
             "house_tables": [table_to_diagnostic(table) for table in house_tables],
             "senate_tables": [table_to_diagnostic(table) for table in senate_tables],

@@ -13,7 +13,7 @@ class ExportTests(unittest.TestCase):
         row = blank_row()
         row.update({
             "observed_datetime_utc": "2026-08-12T21:11:07+00:00",
-            "vendor": "Test Vendor",
+            "vendor": "ElectIndex",
             "vendor_model": "Test Model",
             "vendor_run_id": "run-1",
             "vendor_forecast_date": "2026-08-12",
@@ -55,6 +55,7 @@ class ExportTests(unittest.TestCase):
         self.assertIn(("US House Popular Vote Projection", "D"), keys)
         self.assertIn(("US House Popular Vote Margin", "D-R"), keys)
         self.assertTrue(all(r["rhubarb_pull_time"] == "2026-08-12T21:11:07+00:00" for r in national))
+        self.assertTrue(all(r["model_web_url"] == "https://electindex.com/forecasts/" for r in national))
 
     def test_house_and_senate_races_go_to_state_file(self):
         national = self._national()

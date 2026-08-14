@@ -1,4 +1,4 @@
-# Export schema 2.0.0
+# Export schema 2.1.0
 
 The collector writes two append-only, long-form CSVs.
 
@@ -6,7 +6,7 @@ The collector writes two append-only, long-form CSVs.
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | Export schema version (`2.0.0`) |
+| `schema_version` | Export schema version (`2.1.0`) |
 | `rhubarb_pull_time` | UTC time Rhubarb retrieved the source, ISO-8601 to the second |
 | `observed_datetime_utc` | Compatibility alias of `rhubarb_pull_time` |
 | `vendor` | Forecast publisher/model vendor |
@@ -25,7 +25,8 @@ The collector writes two append-only, long-form CSVs.
 | `high_value` | Upper uncertainty bound if published |
 | `basis` | Source/model interpretation note for the metric |
 | `source_record_id` | Provider row/race identifier |
-| `source_url` | Public source location |
+| `source_url` | Machine-readable/raw source location used for the observation |
+| `model_web_url` | Human-facing published model page for the observation |
 | `source_file` | Raw source file(s) |
 | `data_quality` | Provider quality/status text |
 | `notes` | Additional provenance |

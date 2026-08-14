@@ -2,6 +2,23 @@
 
 Local-first append-only collector for publicly available 2026 U.S. congressional election forecasts. It runs on macOS or Linux with Python 3.10+ and uses only the Python standard library.
 
+## Published model links and partial-source collection
+
+Export schema 2.1.0 adds `model_web_url` to both CSVs. `source_url` remains the
+raw/machine-readable provenance URL, while `model_web_url` points to the
+publisher's human-facing live forecast page. Existing 2.0.0 history can be
+migrated once with:
+
+```bash
+python migrate_model_web_urls.py --output-dir ./collected_data
+```
+
+Source adapters are section-tolerant where possible. In particular, Race to
+the WH can return a `[PARTIAL]` source result when national projections remain
+readable but a House-district or Senate-race table has changed or disappeared.
+Readable sections are retained; unavailable sections are reported explicitly.
+
+
 ## Enabled sources
 
 1. **Election StatSheet / Mac Tan** — national House seats and House popular vote, national Senate seats, all 435 House district probabilities, all 35 Senate race probabilities, and a historical timeline.
