@@ -1,6 +1,8 @@
 import json
 import unittest
+from unittest.mock import patch
 
+from forecast_collector.browser_capture import BrowserCapture
 from forecast_collector.errors import SourceFormatError
 from forecast_collector.http import HttpResponse
 from forecast_collector.schema import validate_rows
@@ -429,6 +431,108 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
         senate_rows = [row for row in rows if row["row_type"] == "senate_race"]
         self.assertEqual(len(senate_rows), 1)
         self.assertEqual(validate_rows(rows), 2)
+
+    def test_generic_live_json_feed_rows_are_supported(self):
+        payload = {
+            "results": [
+                {
+                    "District": "NY-01",
+                    "Democratic Win Probability": "62%",
+                    "Republican Win Probability": "38%",
+                    "Projected Margin": "D+3.2",
+                },
+                {
+                    "District": "TX-01",
+                    "Democratic Win Probability": "8%",
+                    "Republican Win Probability": "92%",
+                    "Projected Margin": "R+22.0",
+                },
+            ]
+        }
+        tables = extract_infogram_tables(payload)
+        records = select_house_records(tables, require_complete_counts=False)
+        self.assertEqual(set(records), {"NY-01", "TX-01"})
+        self.assertEqual(records["NY-01"].d_probability, 62.0)
+        self.assertEqual(records["TX-01"].r_probability, 92.0)
+
+    def test_browser_network_payload_completes_static_shell(self):
+        house_rows = []
+        for state, count in HOUSE_SEATS_BY_STATE.items():
+            for district in range(1, count + 1):
+                house_rows.append({
+                    "District": f"{state}-{district:02d}",
+                    "Democratic Win Probability": "55%",
+                    "Republican Win Probability": "45%",
+                    "Projected Margin": "D+2",
+                })
+        senate_rows = [
+            {
+                "State": state,
+                "Democratic Win Probability": "48%",
+                "Republican Win Probability": "52%",
+                "Projected Margin": "R+1",
+            }
+            for state in SENATE_STATES
+        ]
+        house_static = infogram_payload(
+            chart(
+                "National House Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "73%", "231"],
+                    ["Republicans", "27%", "204"],
+                ],
+            ),
+            chart(
+                "National House Popular Vote Projection",
+                [["Metric", "Projection"], ["House Popular Vote", "D+7"]],
+            ),
+        )
+        senate_static = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "54%", "51"],
+                    ["Republicans", "46%", "49"],
+                ],
+            )
+        )
+        source = RaceToTheWHSource()
+        house_embed = source.fallback_house_embed_url
+        senate_embed = source.fallback_senate_embed_url
+        bodies = {
+            source.house_page_url: '<div data-id="cf74856e-8d17-40f6-b10d-3d23a3ee3cff" data-title="2026 House Forecast"></div>',
+            source.senate_page_url: '<div data-id="_/vs9b6iAeARko8cuwH51x" data-title="2026 Senate Forecast"></div>',
+            house_embed: "window.infographicData=" + json.dumps(house_static) + ";",
+            senate_embed: "window.infographicData=" + json.dumps(senate_static) + ";",
+        }
+        captures = [
+            BrowserCapture(
+                requested_urls=[house_embed],
+                globals=[{"live_house_feed": house_rows}],
+            ),
+            BrowserCapture(
+                requested_urls=[senate_embed],
+                globals=[{"live_senate_feed": senate_rows}],
+            ),
+        ]
+        with patch(
+            "forecast_collector.sources.race_to_the_wh.capture_public_pages",
+            side_effect=captures,
+        ):
+            result = source.collect(
+                FakeClient(bodies),
+                observed_datetime_utc="2026-08-20T20:00:00+00:00",
+                include_house_districts=True,
+                include_senate_races=True,
+            )
+        self.assertFalse(result.details["partial"])
+        self.assertTrue(result.details["browser_fallback_used"])
+        self.assertEqual(result.details["house_record_count"], 435)
+        self.assertEqual(result.details["senate_record_count"], 35)
+        self.assertEqual(len(result.rows), 471)
+        self.assertEqual(validate_rows(result.rows), 471)
 
 
 if __name__ == "__main__":

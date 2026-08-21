@@ -1,31 +1,28 @@
-# f_collector v1.5.0 build report
+# f_collector v1.6.2 build report
 
-Built from the user-supplied current `f_collector` repository on 2026-08-14.
+Built from the user-supplied current `f_collector` repository on 2026-08-20.
 
-## Changes
+## Race to the WH repair
 
-- Fixed Grant Williams v5 parsing. The adapter now prefers `national_model.election_day.mean`, then the current summary field `election_day_national_margin`, while retaining legacy fallbacks. It no longer eagerly evaluates the obsolete `summary.national_environment` key.
-- Made Race to the WH section-tolerant. National House/Senate metrics, House districts, and Senate races are parsed independently. Missing/incomplete race tables now produce a `[PARTIAL]` result with coverage diagnostics when other forecast sections remain usable.
-- Added `model_web_url` to every national and state/district export row. `source_url` remains the raw/machine-readable provenance URL; `model_web_url` points to the publisher's human-facing live forecast.
-- Bumped export/PostgreSQL schema from 2.0.0 to 2.1.0.
-- Added `migrate_model_web_urls.py`, an idempotent one-time history migration that adds the new column to existing Git-tracked CSV history without changing forecast values or row identities.
-- Updated PostgreSQL preparation/schema/views to retain `model_web_url`.
-- Aligned package, collector, and deployment pipeline versions at 1.5.0.
+- Preserves the existing national and state/district CSV layouts and export schema 2.1.0.
+- Keeps the static Infogram parser as the first and fastest path.
+- Adds the publisher's public regional House-map project as a supplemental source when the main House project does not expose all 435 districts.
+- Adds a Playwright/Chrome network fallback for Infogram projects whose current data are delivered only after JavaScript runs. The fallback captures public document, XHR, and fetch responses; it does not log in or bypass access controls.
+- Adds semantic parsing for generic JSON row/record feeds in addition to existing modern and legacy Infogram chart layouts.
+- Retains partial-section behavior and never derives or fabricates race probabilities from missing data.
+- Records browser-fallback use, regional-map provenance, and capture warnings in source diagnostics.
 
-## Published model URL mapping
+## Installation behavior
 
-- Election StatSheet: House / Senate / Districts pages by metric.
-- ElectIndex: `https://electindex.com/forecasts/`
-- Grant Williams: `https://grantbw4.github.io/2026-midterms-forecast/`
-- Race to the WH: House or Senate forecast page by metric.
+- Forces Python, Playwright's Node driver, and Chrome artifacts into a private writable cache directory instead of trusting macOS `/var/folders/.../T`. The browser helper restores the caller's environment after each capture.
+- Installs Playwright's Python driver into every existing project virtual environment and reuses an installed Chrome/Chromium executable.
+- Runs the complete tests and shell syntax checks before committing.
+- Commits and pushes the code update so `sync_forecast_database.sh` sees a clean Git worktree.
+- A live publisher check is informative and does not roll back code that has passed the deterministic suite.
 
 ## Verification
 
-- 51/51 unit/integration tests pass.
-- Python compilation passes.
-- Bash syntax validation passes for the collector/deployment scripts.
-- Migrated current history validates at 96 national rows and 16,920 state/district rows.
-- PostgreSQL input validation passes for the migrated current history.
-- Migration is tested for idempotence.
-- Race to the WH fixture proves national/Senate data survive a missing House-district table.
-- Grant Williams fixture reproduces the current v5 summary shape that caused the reported `national_environment` KeyError.
+- 55 deterministic unit/integration tests pass; one local browser-network test is skipped only where the execution environment administratively blocks all browser networking. The added regression test starts with `TMPDIR`, `TMP`, and `TEMP` pointing at a non-directory and verifies that Playwright receives a writable replacement.
+- Static shell plus browser-delivered 435 House and 35 Senate rows produces a complete 471-row normalized source snapshot in fixtures.
+- Generic live JSON record feeds, regional fallback behavior, append-only exports, Git synchronization, ECS staging, and schema validation remain covered.
+- Python compilation and Bash syntax validation pass.

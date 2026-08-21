@@ -12,6 +12,12 @@ set -Eeuo pipefail
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Do not trust macOS's inherited /var/folders TMPDIR. Playwright's Node driver
+# uses this private, writable cache path during normal collection/deployment.
+EFC_BROWSER_TMPDIR="${EFC_BROWSER_TMPDIR:-${XDG_CACHE_HOME:-$HOME/.cache}/f_collector/playwright}"
+mkdir -p "$EFC_BROWSER_TMPDIR"
+chmod 700 "$EFC_BROWSER_TMPDIR" 2>/dev/null || true
+export EFC_BROWSER_TMPDIR
 DATA_DIR="$SCRIPT_DIR/collected_data"
 NATIONAL_REL="collected_data/election_forecasts_2026_national.csv"
 STATE_REL="collected_data/election_forecasts_2026_state.csv"
@@ -22,7 +28,7 @@ DEPLOYER="$SCRIPT_DIR/election_forecasts_ecs.sh"
 COLLECTOR="$SCRIPT_DIR/run.sh"
 
 ACTION="run"
-PIPELINE_VERSION="1.5.0"
+PIPELINE_VERSION="1.6.2"
 REMOTE="${FORECAST_GIT_REMOTE:-origin}"
 BRANCH="${FORECAST_GIT_BRANCH:-main}"
 FORCE_DEPLOY=false

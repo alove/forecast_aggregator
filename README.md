@@ -26,7 +26,7 @@ Readable sections are retained; unavailable sections are reported explicitly.
 3. **Grant Williams** — an atomic public House/Senate JSON bundle with national forecasts, all 435 House districts, and all Senate races in the cycle.
 4. **Race to the WH / Logan Phillips** — the public House and Senate forecast Infograms: national chamber projections and control probabilities, the adjusted national House popular-vote projection, all 435 House districts, and all 35 Senate races.
 
-The first three adapters use stable public raw CSV/JSON endpoints. Race to the WH publishes its forecast through public Infogram embeds. That adapter discovers the current embeds from the publisher's House and Senate pages, reads the static data payload already delivered with each public embed, and refuses the source run unless it can identify the required national metrics plus exactly 435 House districts and 35 Senate races. It does not use a browser, log in, or bypass an access control.
+The first three adapters use stable public raw CSV/JSON endpoints. Race to the WH publishes its forecast through public Infogram embeds. That adapter discovers the current House, Senate, and regional House-map projects and first parses their static payloads. When Infogram delivers a connected live table only after JavaScript runs, the adapter can reuse an already-installed Chrome/Chromium browser through Playwright to observe the public JSON/table responses and feed them through the same semantic validator. It does not log in, click through an access control, or use private Infogram APIs.
 
 ## Install
 
@@ -34,7 +34,8 @@ The first three adapters use stable public raw CSV/JSON endpoints. Race to the W
 ./setup.sh
 ```
 
-The installer creates a project-local `.venv`. No third-party packages are required.
+The installer creates a project-local `.venv`, installs Playwright’s Python driver, and reuses an existing Chrome/Chromium browser. It does not download a second browser.
+Browser launches use `${EFC_BROWSER_TMPDIR:-~/.cache/f_collector/playwright}` rather than trusting macOS’s inherited `/var/folders/.../T`; this also applies during the Git/AWS synchronization command.
 
 Set a contact email in the HTTP user agent before automated use:
 
@@ -179,7 +180,7 @@ For a first check of the rendered-source adapter without modifying either CSV:
   --verbose
 ```
 
-If Race to the WH changes its Infogram layout, the adapter exits that source with a visible error rather than appending a partial or malformed snapshot. Other selected sources remain independent.
+If Race to the WH changes its Infogram layout, the adapter reports explicit section coverage and never invents missing values. Readable sections remain available, while other selected sources remain independent.
 
 ## GitHub-canonical collection and database deployment
 

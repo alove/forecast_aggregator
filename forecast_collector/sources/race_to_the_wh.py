@@ -9,6 +9,7 @@ import re
 from typing import Any, Iterable, Iterator
 from urllib.parse import urljoin
 
+from ..browser_capture import BrowserCapture, capture_public_pages
 from ..errors import SourceFormatError
 from ..http import HttpClient
 from ..models import RawArtifact, SourceResult
@@ -101,12 +102,17 @@ class RaceToTheWHSource(ForecastSource):
     model_name = "Race to the WH 2026 Congressional Forecast"
     house_page_url = "https://www.racetothewh.com/house"
     senate_page_url = "https://www.racetothewh.com/senate/26"
+    house_map_page_url = "https://www.racetothewh.com/house/26map"
     fallback_house_embed_url = (
         "https://e.infogram.com/cf74856e-8d17-40f6-b10d-3d23a3ee3cff"
         "?embed_type=responsive_iframe&src=embed"
     )
     fallback_senate_embed_url = (
         "https://e.infogram.com/_/vs9b6iAeARko8cuwH51x"
+        "?embed_type=responsive_iframe&src=embed"
+    )
+    fallback_house_map_embed_url = (
+        "https://e.infogram.com/_/lXf0SXsGWnuyOkj93JiS"
         "?embed_type=responsive_iframe&src=embed"
     )
 
@@ -133,31 +139,131 @@ class RaceToTheWHSource(ForecastSource):
         house_embed = client.get(house_embed_url)
         senate_embed = client.get(senate_embed_url)
 
-        house_payload = self.extract_infographic_data(house_embed.text(), label="House")
-        senate_payload = self.extract_infographic_data(senate_embed.text(), label="Senate")
-        rows, run_id, forecast_date, diagnostics = self.normalize_infograms(
-            house_payload,
-            senate_payload,
-            observed_datetime_utc=observed_datetime_utc,
-            include_house_districts=include_house_districts,
-            include_senate_races=include_senate_races,
-            require_complete_counts=True,
-            house_embed_url=house_embed_url,
-            senate_embed_url=senate_embed_url,
+        house_payloads: list[Any] = [
+            self.extract_infographic_data(house_embed.text(), label="House")
+        ]
+        senate_payloads: list[Any] = [
+            self.extract_infographic_data(senate_embed.text(), label="Senate")
+        ]
+        raw_artifacts = [
+            RawArtifact("house_page.html", house_page.content),
+            RawArtifact("senate_page.html", senate_page.content),
+            RawArtifact("house_infogram.html", house_embed.content),
+            RawArtifact("senate_infogram.html", senate_embed.content),
+        ]
+        collection_warnings: list[str] = []
+        house_map_embed_url = ""
+        browser_fallback_used = False
+
+        def normalize_current() -> tuple[list[dict[str, Any]], str, str, dict[str, Any]]:
+            return self.normalize_infograms(
+                _combine_payloads(house_payloads, label="house"),
+                _combine_payloads(senate_payloads, label="senate"),
+                observed_datetime_utc=observed_datetime_utc,
+                include_house_districts=include_house_districts,
+                include_senate_races=include_senate_races,
+                require_complete_counts=True,
+                house_embed_url=house_embed_url,
+                senate_embed_url=senate_embed_url,
+            )
+
+        initial_normalize_error: SourceFormatError | None = None
+        try:
+            rows, run_id, forecast_date, diagnostics = normalize_current()
+        except SourceFormatError as exc:
+            initial_normalize_error = exc
+            rows, run_id, forecast_date = [], "", ""
+            diagnostics = {
+                "partial": True,
+                "partial_sections": [f"static Infogram parse: {exc}"],
+                "house_record_count": 0,
+                "senate_record_count": 0,
+                "national": {},
+            }
+            collection_warnings.append(f"static Infogram parse was incomplete: {exc}")
+
+        # The main House project has periodically omitted the all-district table
+        # from its static shell. The publisher's regional map is a public
+        # companion project and can supply the same district forecast data.
+        if include_house_districts and diagnostics.get("house_record_count", 0) < 435:
+            try:
+                house_map_page = client.get(self.house_map_page_url)
+                house_map_embed_url = self.discover_embed_url(
+                    house_map_page.text(),
+                    kind="house",
+                    fallback=self.fallback_house_map_embed_url,
+                )
+                house_map_embed = client.get(house_map_embed_url)
+                house_payloads.append(
+                    self.extract_infographic_data(
+                        house_map_embed.text(), label="House regional map"
+                    )
+                )
+                raw_artifacts.extend([
+                    RawArtifact("house_map_page.html", house_map_page.content),
+                    RawArtifact("house_map_infogram.html", house_map_embed.content),
+                ])
+                rows, run_id, forecast_date, diagnostics = normalize_current()
+            except Exception as exc:
+                collection_warnings.append(
+                    f"public House regional companion was unavailable: {type(exc).__name__}: {exc}"
+                )
+
+        needs_house_browser = bool(
+            (include_house_districts and diagnostics.get("house_record_count", 0) < 435)
+            or _missing_chamber_topline(diagnostics, chamber="house")
         )
+        needs_senate_browser = bool(
+            (include_senate_races and diagnostics.get("senate_record_count", 0) < 35)
+            or _missing_chamber_topline(diagnostics, chamber="senate")
+        )
+
+        # Infogram supports charts connected to live JSON/database sources. For
+        # those projects current data arrives only after JavaScript runs. When
+        # the static shell is incomplete, observe the same public browser
+        # responses and fold their tables into the normal semantic parser.
+        if needs_house_browser:
+            house_urls = [house_embed_url]
+            if house_map_embed_url:
+                house_urls.append(house_map_embed_url)
+            capture = capture_public_pages(house_urls)
+            browser_fallback_used = browser_fallback_used or capture.available
+            collection_warnings.extend(capture.warnings)
+            captured_payload = _browser_capture_payload(capture, label="house")
+            if captured_payload is not None:
+                house_payloads.append(captured_payload)
+
+        if needs_senate_browser:
+            capture = capture_public_pages([senate_embed_url])
+            browser_fallback_used = browser_fallback_used or capture.available
+            collection_warnings.extend(capture.warnings)
+            captured_payload = _browser_capture_payload(capture, label="senate")
+            if captured_payload is not None:
+                senate_payloads.append(captured_payload)
+
+        if needs_house_browser or needs_senate_browser:
+            try:
+                rows, run_id, forecast_date, diagnostics = normalize_current()
+                initial_normalize_error = None
+            except SourceFormatError as exc:
+                if initial_normalize_error is not None:
+                    raise SourceFormatError(
+                        f"static and browser-backed Race to the WH parsing failed; "
+                        f"static={initial_normalize_error}; browser={exc}"
+                    ) from exc
+                raise
+
+        diagnostics["collection_warnings"] = list(dict.fromkeys(collection_warnings))
+        diagnostics["browser_fallback_used"] = browser_fallback_used
+        diagnostics["house_map_embed_url"] = house_map_embed_url
         diagnostics_bytes = json.dumps(
             diagnostics, sort_keys=True, indent=2, ensure_ascii=False
         ).encode("utf-8")
+        raw_artifacts.append(RawArtifact("extracted_tables.json", diagnostics_bytes))
         return SourceResult(
             source_name=self.name,
             rows=rows,
-            raw_artifacts=[
-                RawArtifact("house_page.html", house_page.content),
-                RawArtifact("senate_page.html", senate_page.content),
-                RawArtifact("house_infogram.html", house_embed.content),
-                RawArtifact("senate_infogram.html", senate_embed.content),
-                RawArtifact("extracted_tables.json", diagnostics_bytes),
-            ],
+            raw_artifacts=raw_artifacts,
             details={
                 "forecast_dates": [forecast_date] if forecast_date else [],
                 "run_ids": [run_id],
@@ -168,6 +274,9 @@ class RaceToTheWHSource(ForecastSource):
                 "senate_record_count": diagnostics.get("senate_record_count", 0),
                 "house_embed_url": house_embed_url,
                 "senate_embed_url": senate_embed_url,
+                "house_map_embed_url": house_map_embed_url,
+                "browser_fallback_used": browser_fallback_used,
+                "collection_warnings": list(dict.fromkeys(collection_warnings)),
             },
         )
 
@@ -642,6 +751,103 @@ class RaceToTheWHSource(ForecastSource):
         return result, run_id, forecast_date, diagnostics
 
 
+def _combine_payloads(payloads: Iterable[Any], *, label: str) -> dict[str, Any]:
+    return {
+        "capture_label": label,
+        "payloads": [payload for payload in payloads if payload not in (None, "")],
+    }
+
+
+def _missing_chamber_topline(diagnostics: dict[str, Any], *, chamber: str) -> bool:
+    national = diagnostics.get("national", {})
+    if not isinstance(national, dict):
+        return True
+    if chamber == "house":
+        keys = ("house_seats", "house_control", "house_vote")
+    elif chamber == "senate":
+        keys = ("senate_seats", "senate_control")
+    else:
+        raise ValueError("chamber must be house or senate")
+    return any(not national.get(key) for key in keys)
+
+
+def _decode_json_documents(text: str) -> list[Any]:
+    candidates: list[Any] = []
+    stripped = text.lstrip("\ufeff \t\r\n")
+    if not stripped:
+        return candidates
+    try:
+        candidates.append(json.loads(stripped))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    # JSONP and common JavaScript assignment wrappers used by live feeds.
+    wrappers = (
+        re.compile(r"^[\w.$]+\s*\(\s*(\{.*\}|\[.*\])\s*\)\s*;?\s*$", re.DOTALL),
+        re.compile(r"^(?:var|let|const)\s+[\w$]+\s*=\s*(\{.*\}|\[.*\])\s*;?\s*$", re.DOTALL),
+    )
+    for pattern in wrappers:
+        match = pattern.match(stripped)
+        if not match:
+            continue
+        try:
+            candidates.append(json.loads(match.group(1)))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    # Application/json script blocks are common in newer publish templates.
+    for match in re.finditer(
+        r"<script[^>]+type=[\"']application/(?:ld\+)?json[\"'][^>]*>(.*?)</script>",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            candidates.append(json.loads(html_lib.unescape(match.group(1)).strip()))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return candidates
+
+
+def _browser_capture_payload(capture: BrowserCapture, *, label: str) -> dict[str, Any] | None:
+    payloads: list[Any] = list(capture.globals)
+    document_summaries: list[dict[str, Any]] = []
+    for document in capture.documents:
+        decoded = _decode_json_documents(document.text)
+        try:
+            decoded.append(
+                RaceToTheWHSource.extract_infographic_data(
+                    document.text, label=f"browser-captured {label} response"
+                )
+            )
+        except SourceFormatError:
+            pass
+        if decoded:
+            payloads.extend(decoded)
+            document_summaries.append({
+                "url": document.url,
+                "content_type": document.content_type,
+                "decoded_payload_count": len(decoded),
+                "bytes": len(document.text.encode("utf-8")),
+            })
+    for index, rows in enumerate(capture.tables, start=1):
+        payloads.append({
+            "type": "table",
+            "title": f"browser rendered {label} table {index}",
+            "data": [rows],
+            "sheetnames": [f"Rendered {index}"],
+        })
+    if not payloads and not capture.text_lines:
+        return None
+    return {
+        "capture_type": "public_browser_network",
+        "capture_label": label,
+        "documents": document_summaries,
+        "payloads": payloads,
+        "rendered_text_lines": capture.text_lines,
+        "warnings": capture.warnings,
+    }
+
+
 def _clean_text(value: Any) -> str:
     if value in (None, ""):
         return ""
@@ -800,28 +1006,109 @@ def _tables_from_chart_data(
     return tables
 
 
+def _looks_like_forecast_rows(rows: list[list[str]]) -> bool:
+    if len(rows) < 2:
+        return False
+    width = max((len(row) for row in rows), default=0)
+    if width < 2 or width > 80 or len(rows) > 5_000:
+        return False
+    sample_rows = rows[: min(30, len(rows))]
+    text = _norm(" ".join(cell for row in sample_rows for cell in row[: min(30, len(row))]))
+    if not text:
+        return False
+    keywords = (
+        "district", "state", "race", "seat", "chance", "probability",
+        "forecast", "projected", "projection", "margin", "majority",
+        "control", "popular vote", "rating", "democrat", "republican",
+        "gop", "dem chance", "rep chance", "d pct", "r pct",
+    )
+    semantic = any(keyword in text for keyword in keywords)
+    location = bool(re.search(r"\b[A-Z]{2}[\s-]?(?:AL|0?[1-9]|[1-4][0-9]|5[0-2])\b", " ".join(
+        cell for row in sample_rows for cell in row[:4]
+    ), re.IGNORECASE))
+    party = any(word in text.split() for word in (
+        "d", "r", "dem", "dems", "democrat", "democrats", "democratic",
+        "gop", "rep", "republican", "republicans",
+    ))
+    rating = any(phrase in text for phrase in (
+        "safe d", "safe r", "likely d", "likely r", "lean d", "lean r",
+        "tilt d", "tilt r", "toss up", "tossup",
+    ))
+    return semantic or (location and (party or rating))
+
+
+def _generic_tables_from_node(
+    node: Any,
+    *,
+    entity_path: str,
+    title: str,
+) -> list[InfogramTable]:
+    candidates: list[tuple[str, Any]] = []
+    if isinstance(node, list):
+        candidates.append(("Captured data", node))
+    elif isinstance(node, dict):
+        for key in (
+            "rows", "records", "results", "items", "values", "cells", "data",
+        ):
+            if key in node:
+                candidates.append((_clean_text(key) or "Captured data", node[key]))
+    tables: list[InfogramTable] = []
+    for sheet_name, value in candidates:
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, dict) for item in value)
+            and any(
+                isinstance(cell, (dict, list))
+                for item in value
+                for cell in item.values()
+            )
+        ):
+            # This is usually a collection of Infogram entities, not a row
+            # table. Its actual chart data will be discovered recursively.
+            continue
+        rows = _coerce_table_rows(value)
+        if rows and _looks_like_forecast_rows(rows):
+            tables.append(InfogramTable(entity_path, title, sheet_name, rows))
+    return tables
+
+
 def extract_infogram_tables(payload: dict[str, Any]) -> list[InfogramTable]:
     tables: list[InfogramTable] = []
     seen: set[str] = set()
+
+    def add_table(table: InfogramTable) -> None:
+        canonical = json.dumps(
+            table.rows,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if canonical not in seen:
+            seen.add(canonical)
+            tables.append(table)
+
     for path, node in _iter_nodes(payload):
-        if not isinstance(node, dict):
-            continue
-        chart_data = node.get("chartData", node.get("chart_data"))
-        if chart_data is None and _looks_like_legacy_chart(node):
-            chart_data = node
-        if chart_data is None:
-            continue
         entity_path = "/".join(path) or "root"
-        title = _owner_title(node, path)
-        for table in _tables_from_chart_data(chart_data, entity_path=entity_path, title=title):
-            canonical = json.dumps(
-                [table.title, table.sheet_name, table.rows],
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            if canonical not in seen:
-                seen.add(canonical)
-                tables.append(table)
+        if isinstance(node, dict):
+            title = _owner_title(node, path)
+            chart_data = node.get("chartData", node.get("chart_data"))
+            if chart_data is None and _looks_like_legacy_chart(node):
+                chart_data = node
+            if chart_data is not None:
+                for table in _tables_from_chart_data(
+                    chart_data, entity_path=entity_path, title=title
+                ):
+                    add_table(table)
+            for table in _generic_tables_from_node(
+                node, entity_path=entity_path, title=title
+            ):
+                add_table(table)
+        elif isinstance(node, list):
+            title = path[-1] if path else "Captured data"
+            for table in _generic_tables_from_node(
+                node, entity_path=entity_path, title=title
+            ):
+                add_table(table)
     return tables
 
 

@@ -22,8 +22,11 @@ if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
   exit 1
 fi
 
+"$VENV_DIR/bin/python" -m pip install --upgrade 'playwright>=1.55,<2'
+
 echo "Created isolated Python environment: $VENV_DIR"
-echo "No third-party packages are required for collection or ECS deployment."
+echo "Installed Playwright's Python driver for the public Infogram live-data fallback."
+echo "The fallback reuses an existing Chrome/Chromium browser; it does not download another browser."
 echo "Collect locally:       $SCRIPT_DIR/run.sh collect --output-dir $SCRIPT_DIR/collected_data"
 echo "Validate DB inputs:    $SCRIPT_DIR/election_forecasts_ecs.sh validate"
 echo "Deploy forecast DB:    $SCRIPT_DIR/election_forecasts_ecs.sh up"
