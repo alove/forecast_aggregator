@@ -182,6 +182,8 @@ For a first check of the rendered-source adapter without modifying either CSV:
 
 If Race to the WH changes its Infogram layout, the adapter reports explicit section coverage and never invents missing values. Readable sections remain available, while other selected sources remain independent.
 
+Race to the WH's displayed national seat projections can contain one-decimal rounding whose Democratic and Republican values add to slightly more than the chamber size. When that overshoot is no more than 0.2 seats and Other is absent or zero, the adapter proportionally reconciles the two displayed major-party values to exactly 435 House seats or 100 Senate seats. Larger overshoots and contradictory positive Other values remain hard failures; the shared export validator is not relaxed.
+
 ## GitHub-canonical collection and database deployment
 
 For scheduled production use, use `sync_forecast_database.sh` rather than the

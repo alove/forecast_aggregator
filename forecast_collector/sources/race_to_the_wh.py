@@ -1223,6 +1223,7 @@ def _normalize_party_values(
     d = _parse_pct(d_value) if percentages else _parse_number(d_value)
     r = _parse_pct(r_value) if percentages else _parse_number(r_value)
     other = _parse_pct(other_value) if percentages else _parse_number(other_value)
+    other_was_supplied = other is not None
     if d is None and r is None:
         return None
     if percentages:
@@ -1244,15 +1245,47 @@ def _normalize_party_values(
     total = d + r + other
     if abs(total - target) > max(1.0, target * 0.015):
         return None
-    other = max(0.0, other)
-    # Rebalance tiny display-rounding drift into Other, preserving the two
-    # published major-party values.
-    other += target - (d + r + other)
-    return (
+
+    # Preserve published D/R values whenever their residual leaves a
+    # non-negative Other bucket. If the two displayed major-party values alone
+    # exceed the chamber total by no more than 0.2, treat that as publisher
+    # display-rounding drift and scale the pair proportionally. Clamping a
+    # negative residual to zero without scaling is what previously emitted
+    # impossible totals such as 218.6 + 216.5 + 0 = 435.1.
+    residual_other = target - d - r
+    if residual_other < -0.2:
+        return None
+    if residual_other < 0.0:
+        if other_was_supplied and other > 0.000001:
+            return None
+        major_total = d + r
+        if major_total <= 0.0:
+            return None
+        d = d * target / major_total
+        r = target - d
+        other = 0.0
+    else:
+        other = residual_other
+
+    # Round once, then place any sub-micro rounding remainder in a bucket that
+    # can absorb it without becoming negative. This keeps the canonical tuple
+    # at the exact requested chamber/probability total at export precision.
+    normalized = [
         float(rounded(d)),
         float(rounded(r)),
-        float(rounded(max(0.0, other))),
-    )
+        float(rounded(other)),
+    ]
+    correction = float(rounded(target - sum(normalized)))
+    if correction:
+        if normalized[2] + correction >= 0.0:
+            normalized[2] = float(rounded(normalized[2] + correction))
+        elif normalized[1] + correction >= 0.0:
+            normalized[1] = float(rounded(normalized[1] + correction))
+        else:
+            return None
+    if min(normalized) < 0.0 or abs(sum(normalized) - target) > 0.000001:
+        return None
+    return normalized[0], normalized[1], normalized[2]
 
 
 def _parse_margin_dem(value: Any, *, row_context: str = "", header_context: str = "") -> float | None:

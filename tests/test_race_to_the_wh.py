@@ -8,6 +8,7 @@ from forecast_collector.http import HttpResponse
 from forecast_collector.schema import validate_rows
 from forecast_collector.sources.race_to_the_wh import (
     RaceToTheWHSource,
+    _normalize_party_values,
     extract_infogram_tables,
     parse_house_table,
     select_house_records,
@@ -115,6 +116,107 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
         self.assertEqual(tables[0].sheet_name, "Forecast")
         records = parse_house_table(tables[0])
         self.assertEqual(records["NY-01"].d_probability, 60.0)
+
+    def test_exact_house_seat_projection_is_unchanged(self):
+        self.assertEqual(
+            _normalize_party_values(
+                "231", "204", target=435.0, percentages=False
+            ),
+            (231.0, 204.0, 0.0),
+        )
+
+    def test_small_house_seat_shortfall_becomes_other(self):
+        values = _normalize_party_values(
+            "218.4", "216.5", target=435.0, percentages=False
+        )
+        self.assertEqual(values, (218.4, 216.5, 0.1))
+        self.assertEqual(sum(values), 435.0)
+
+    def test_tiny_house_seat_overshoot_is_proportionally_reconciled(self):
+        values = _normalize_party_values(
+            "218.6", "216.5", target=435.0, percentages=False
+        )
+        self.assertEqual(values, (218.549759, 216.450241, 0.0))
+        self.assertEqual(sum(values), 435.0)
+        self.assertAlmostEqual(
+            values[0] / values[1], 218.6 / 216.5, places=6
+        )
+
+    def test_explicit_zero_other_does_not_preserve_a_435_1_total(self):
+        values = _normalize_party_values(
+            "218.6", "216.5", "0", target=435.0, percentages=False
+        )
+        self.assertEqual(values, (218.549759, 216.450241, 0.0))
+        self.assertEqual(sum(values), 435.0)
+
+    def test_tiny_control_probability_overshoot_is_reconciled(self):
+        values = _normalize_party_values(
+            "50.1%", "50.0%", target=100.0, percentages=True
+        )
+        self.assertEqual(values, (50.04995, 49.95005, 0.0))
+        self.assertEqual(sum(values), 100.0)
+
+    def test_positive_other_conflicting_with_major_party_overshoot_is_rejected(self):
+        self.assertIsNone(
+            _normalize_party_values(
+                "218.6", "216.5", "0.1", target=435.0, percentages=False
+            )
+        )
+
+    def test_large_house_seat_overshoot_is_rejected(self):
+        self.assertIsNone(
+            _normalize_party_values(
+                "219", "217", target=435.0, percentages=False
+            )
+        )
+        self.assertIsNone(
+            _normalize_party_values(
+                "219", "217", "0", target=435.0, percentages=False
+            )
+        )
+
+    def test_live_like_435_1_house_topline_passes_schema_validation(self):
+        house = infogram_payload(
+            chart(
+                "National House Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "50.5%", "218.6"],
+                    ["Republicans", "49.5%", "216.5"],
+                ],
+            )
+        )
+        senate = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "50%", "50"],
+                    ["Republicans", "50%", "50"],
+                ],
+            )
+        )
+        rows, _, _, diagnostics = RaceToTheWHSource().normalize_infograms(
+            house,
+            senate,
+            observed_datetime_utc="2026-08-21T12:53:25+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        self.assertFalse(diagnostics["partial"])
+        self.assertEqual(len(rows), 1)
+        national = rows[0]
+        self.assertEqual(national["house_seats_d"], 218.549759)
+        self.assertEqual(national["house_seats_r"], 216.450241)
+        self.assertEqual(national["house_seats_other"], 0.0)
+        self.assertEqual(
+            national["house_seats_d"]
+            + national["house_seats_r"]
+            + national["house_seats_other"],
+            435.0,
+        )
+        self.assertEqual(validate_rows(rows), 1)
 
     def test_normalize_house_senate_and_popular_vote(self):
         house = infogram_payload(

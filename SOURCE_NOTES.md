@@ -54,6 +54,8 @@ Tables are selected semantically rather than by fragile element IDs. National Ho
 
 A House expected-seat projection is derived from district probabilities only when all 435 districts are readable; it is never inferred from a partial race table. The published House popular-vote figure is labeled as Race to the WH's adjusted two-party projection because the provider's methodology imputes uncontested districts.
 
+Published national seat values may be displayed to one decimal place and can therefore produce a tiny D-plus-R overshoot such as 435.1 House seats. The adapter treats an overshoot of at most 0.2 as display-rounding only when Other is missing or zero, scales D and R proportionally to the exact chamber total, and records the six-decimal normalized values. It does not weaken the shared schema validator: larger overshoots or a conflicting positive Other value are rejected.
+
 The current public embed IDs are retained as fallbacks, but the normal path discovers the embeds from the publisher pages on every run. Raw mode saves both landing pages, both exact Infogram responses, and an extracted-table diagnostic file. A source fails completely only when no usable forecast metric or race section can be identified; incomplete sections no longer discard valid sections.
 
 ## Deliberately not enabled yet
