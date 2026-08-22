@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..date_utils import canonical_date_or_blank
 from ..errors import SourceFormatError
 from ..http import HttpClient
 from ..models import RawArtifact, SourceResult
@@ -70,7 +71,8 @@ class GrantWilliamsSource(ForecastSource):
                 RawArtifact("senate_forecast.json", senate_response.content),
             ],
             details={
-                "forecast_dates": [house["metadata"]["updated_at"][:10]],
+                "forecast_dates": [rows[0]["vendor_forecast_date"]]
+                if rows and rows[0].get("vendor_forecast_date") else [],
                 "run_ids": [run_id],
                 "model_status": house["metadata"].get("model_status", ""),
             },
@@ -102,6 +104,16 @@ class GrantWilliamsSource(ForecastSource):
         updated_at = str(hm.get("updated_at", ""))
         if not updated_at or updated_at != str(sm.get("updated_at", "")):
             raise SourceFormatError("House and Senate JSON updated_at values do not match; retry later")
+        forecast_date = canonical_date_or_blank(updated_at[:10])
+        election_date = canonical_date_or_blank(
+            hm.get("election_date", "2026-11-03")
+        )
+        if not election_date:
+            raise SourceFormatError(
+                f"Grant Williams election_date is not trustworthy: "
+                f"{hm.get('election_date')!r}"
+            )
+
         if require_complete_counts and len(districts) != 435:
             raise SourceFormatError(f"expected 435 Grant Williams districts, found {len(districts)}")
         expected_races = int(ss.get("seats_up", 35))
@@ -161,10 +173,10 @@ class GrantWilliamsSource(ForecastSource):
             "vendor": self.name,
             "vendor_model": f"2026 Midterms Forecast v{model_version}" if model_version else "2026 Midterms Forecast",
             "vendor_run_id": run_id,
-            "vendor_forecast_date": updated_at[:10],
+            "vendor_forecast_date": forecast_date,
             "vendor_updated_at_utc": updated_at,
             "model_status": "+".join(statuses),
-            "election_date": str(hm.get("election_date", "2026-11-03")),
+            "election_date": election_date,
             "house_seats_basis": "posterior mean expected seats",
             "house_seats_d": house_d,
             "house_seats_r": house_r,

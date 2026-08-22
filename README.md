@@ -1,6 +1,6 @@
 # 2026 Election Forecast Collector
 
-Local-first append-only collector for publicly available 2026 U.S. congressional election forecasts. It runs on macOS or Linux with Python 3.10+ and uses only the Python standard library.
+Local-first append-only collector for publicly available 2026 U.S. congressional forecasts and prediction-market odds. It runs on macOS or Linux with Python 3.10+. Collector logic uses the Python standard library; Playwright is installed only for Race to the WH's public browser-rendered fallback.
 
 ## Published model links and partial-source collection
 
@@ -13,10 +13,7 @@ migrated once with:
 python migrate_model_web_urls.py --output-dir ./collected_data
 ```
 
-Source adapters are section-tolerant where possible. In particular, Race to
-the WH can return a `[PARTIAL]` source result when national projections remain
-readable but a House-district or Senate-race table has changed or disappeared.
-Readable sections are retained; unavailable sections are reported explicitly.
+Source adapters are section-tolerant where possible. Race to the WH and Kalshi can return a `[PARTIAL]` result when valid published sections remain readable but one or more national metrics, House districts, or Senate races are unavailable. Readable sections are retained; unavailable sections are reported explicitly.
 
 
 ## Enabled sources
@@ -24,9 +21,10 @@ Readable sections are retained; unavailable sections are reported explicitly.
 1. **Election StatSheet / Mac Tan** — national House seats and House popular vote, national Senate seats, all 435 House district probabilities, all 35 Senate race probabilities, and a historical timeline.
 2. **ElectIndex** — public chamber totals, projected national House vote counts, all 435 House races, and all 35 Senate races.
 3. **Grant Williams** — an atomic public House/Senate JSON bundle with national forecasts, all 435 House districts, and all Senate races in the cycle.
-4. **Race to the WH / Logan Phillips** — the public House and Senate forecast Infograms: national chamber projections and control probabilities, the adjusted national House popular-vote projection, all 435 House districts, and all 35 Senate races.
+4. **Race to the WH / Logan Phillips** — the public House and Senate forecast Infograms: national House projections, the adjusted national House popular-vote projection, House districts, Senate races, and national Senate toplines only when one explicit table provides a complete verified D/R result.
+5. **Kalshi** — public live prediction-market prices for House/Senate control, national seat-count ladders, the House popular-vote margin, individual House districts, and individual Senate races.
 
-The first three adapters use stable public raw CSV/JSON endpoints. Race to the WH publishes its forecast through public Infogram embeds. That adapter discovers the current House, Senate, and regional House-map projects and first parses their static payloads. When Infogram delivers a connected live table only after JavaScript runs, the adapter can reuse an already-installed Chrome/Chromium browser through Playwright to observe the public JSON/table responses and feed them through the same semantic validator. It does not log in, click through an access control, or use private Infogram APIs.
+The first three adapters use stable public raw CSV/JSON endpoints. Race to the WH publishes through public Infogram embeds; that adapter first parses static payloads and can reuse an installed Chrome/Chromium browser through Playwright when a public table arrives only after JavaScript runs. Kalshi uses the public unauthenticated Trade API v2. Neither adapter logs in, bypasses access controls, or calls a private API.
 
 ## Install
 
@@ -125,6 +123,7 @@ If a provider publishes a new/corrected run ID, the new values append as a new o
 ./run.sh collect --source electindex
 ./run.sh collect --source grant-williams
 ./run.sh collect --source race-to-the-wh
+./run.sh collect --source kalshi
 
 # Historical Election StatSheet backfill
 ./run.sh collect --source election-statsheet --backfill-election-statsheet
@@ -158,6 +157,8 @@ If a provider publishes a new/corrected run ID, the new values append as a new o
 - `unit`: `percent`, `seats`, or `percentage_points`.
 - `median_value`, `low_value`, `high_value`: populated when the source publishes those intervals/medians.
 - Percentages are 0–100, not 0–1.
+- `vendor_forecast_date` is blank rather than guessed when a source does not provide a trustworthy model snapshot date. CSV blank values load to SQL `NULL`.
+- Kalshi rows are market-implied odds, not statistical model outputs. `rhubarb_pull_time` is their observation time.
 - `congressional_district` is four text digits: state FIPS + two-digit district. Examples: Alabama 1 = `0101`, New York 7 = `3607`, Wyoming at-large = `5601`.
 - Spreadsheet software may auto-convert `0101` to `101`; import the field as text.
 
@@ -182,7 +183,11 @@ For a first check of the rendered-source adapter without modifying either CSV:
 
 If Race to the WH changes its Infogram layout, the adapter reports explicit section coverage and never invents missing values. Readable sections remain available, while other selected sources remain independent.
 
-Race to the WH's displayed national seat projections can contain one-decimal rounding whose Democratic and Republican values add to slightly more than the chamber size. When that overshoot is no more than 0.2 seats and Other is absent or zero, the adapter proportionally reconciles the two displayed major-party values to exactly 435 House seats or 100 Senate seats. Larger overshoots and contradictory positive Other values remain hard failures; the shared export validator is not relaxed.
+Race to the WH's displayed national House seat projection can contain one-decimal rounding whose Democratic and Republican values add to slightly more than 435. When that overshoot is no more than 0.2 seats and Other is absent or zero, the adapter proportionally reconciles the two displayed major-party values to exactly 435 House seats. Larger overshoots and contradictory positive Other values remain hard failures; the shared export validator is not relaxed. National Senate seats and control probabilities are never inferred from free text, race cards, distributions, or partial values: they are emitted only from one compact table that explicitly identifies the Senate metric and supplies a complete plausible D/R pair. Otherwise those fields remain blank and no corresponding export rows are written.
+
+Race to the WH narrative/chart dates are not treated as model timestamps. New rows leave `vendor_forecast_date` blank unless the publisher exposes an unambiguous machine-readable model date. `python -m forecast_collector.data_repairs` atomically blanks older inferred RTWH dates, removes pre-v1.7.1 RTWH national Senate seat/control rows that lack the new metric-specific verification marker, canonicalizes unambiguous legacy dates such as `8/12/26` to `2026-08-12`, and blanks any untrusted optional forecast date rather than guessing. Required election dates remain strict and must normalize to ISO `YYYY-MM-DD`. The repair preserves each canonical file's existing LF or CRLF record-ending convention; CSV-specific validation permits consistent CRLF without treating its carriage returns as trailing whitespace.
+
+Kalshi uses a valid YES-equivalent bid/ask midpoint where possible, then last trade, then a one-sided quote. Empty `0.0000`/`1.0000` order-book bounds are ignored rather than converted to 50%. Individual candidate contracts are summed by party only inside a mutually exclusive event. National expected seats and House popular vote are derived from Kalshi's explicit mutually exclusive national ladders, never by summing incomplete race-level coverage.
 
 ## GitHub-canonical collection and database deployment
 

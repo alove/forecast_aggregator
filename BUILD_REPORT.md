@@ -1,29 +1,38 @@
-# f_collector v1.6.3 build report
+# f_collector v1.7.3 build report
 
-Built from the user-supplied `f_collector` repository plus the installed v1.6.2 Race to the WH browser/temp repair on 2026-08-21.
+Built from the user-supplied `f_collector` repository plus the v1.7.2 Race to the WH/Kalshi/date update on 2026-08-22.
 
-## Race to the WH seat-total repair
+## Exact installer failure repaired
 
-- Preserves the existing national and state/district CSV layouts and export schema 2.1.0.
-- Keeps the common schema requirement that House seats total 435 and Senate seats total 100.
-- Repairs the Race to the WH adapter's handling of tiny publisher display-rounding overshoots. When displayed D and R values alone exceed a chamber total by no more than 0.2 and Other is absent or zero, the adapter scales D and R proportionally to the exact chamber total before export.
-- Preserves exact published D/R values when their residual is non-negative and assigns that residual to Other.
-- Rejects overshoots larger than 0.2 rather than normalizing potentially misparsed data.
-- Rejects a positive published Other value that conflicts with D and R already exceeding the chamber total.
-- Applies a final six-decimal correction so the normalized tuple sums to the requested total at export precision.
+The v1.7.2 installer completed all 109 tests, normalized/export CSV validation, and the production PostgreSQL input validation. It then stopped at Git's whitespace gate with output such as:
 
-## Existing v1.6.2 behavior retained
+```text
+collected_data/election_forecasts_2026_national.csv:1: trailing whitespace.
+...^M
+```
 
-- Static Infogram parsing remains the first path.
-- The public regional House-map project remains the supplemental source when the main project lacks all 435 districts.
-- The Playwright/Chrome public-network fallback remains available for dynamically delivered Infogram tables.
-- Python, Playwright, and Chrome artifacts continue to use the private writable cache directory rather than a broken inherited macOS temp path.
-- Partial-section diagnostics, provenance, append-only exports, Git safety, and database deployment behavior are unchanged.
+The canonical CSV was using valid CRLF record endings. `git diff --check` treats the carriage return on every changed CRLF record as trailing whitespace, even though it is part of the file's established line-ending convention. Because the installer runs with `set -Eeuo pipefail`, that nonzero result triggered its pre-commit rollback.
+
+v1.7.3 corrects the gate without weakening source-code checks:
+
+- Managed Python, shell, test, and documentation files are staged and checked strictly with `git diff --cached --check`.
+- Canonical CSVs are checked by a dedicated byte-level validator that permits consistently used LF or CRLF.
+- Mixed line endings, bare carriage returns, missing final newlines, and spaces/tabs before either line ending remain hard failures.
+- The canonical metadata repair continues to preserve each input file's existing LF/CRLF convention, preventing a whole-file line-ending rewrite.
+- A failed pre-commit installation now clearly reports that the repository was restored to its original Git commit.
+
+## Forecast behavior retained
+
+- Untrusted Race to the WH model dates are stored as blank/SQL `NULL`.
+- Unverified RTWH national Senate seat/control rows are removed and future rows require metric-specific same-table verification.
+- Unambiguous short dates such as `8/12/26` normalize to ISO `2026-08-12`; unknown optional dates become `NULL`.
+- Kalshi remains enabled for national House/Senate control, seat ladders, House popular-vote markets, House districts, and Senate races.
+- Missing publisher or market coverage remains missing; national totals are never manufactured from incomplete race coverage.
 
 ## Verification
 
-- 63 deterministic unit/integration tests run successfully; one browser-network integration test is skipped only because this build environment administratively blocks browser networking.
-- Eight focused rounding tests cover exact totals, a 0.1-seat shortfall, the observed 435.1-seat overshoot, explicit zero Other, control-probability rounding, conflicting positive Other, and rejection of a one-seat overshoot.
-- A live-shaped national fixture containing House projections of 218.6 D and 216.5 R normalizes to 218.549759 D, 216.450241 R, and 0 Other, then passes the unchanged common schema validator.
-- Existing complete 435-House/35-Senate fixtures, browser fallback, regional fallback, append-only storage, Git synchronization, ECS staging, and schema validation remain covered.
-- Python compilation and Bash syntax validation pass.
+- 112 deterministic project tests pass, including three new CRLF/CSV whitespace regressions.
+- The exact v1.7.2 failure was reproduced against a clean synthetic Git repository whose canonical CSVs use CRLF.
+- The v1.7.3 installer passed the complete project suite, export validation, production PostgreSQL validation, strict staged-code whitespace checks, CRLF-aware canonical CSV checks, commit/push synchronization, and clean-worktree verification.
+- A second installation was idempotent and created no additional data repair or Git commit.
+- The installer also passed with `TMPDIR`, `TMP`, and `TEMP` deliberately pointed at an invalid path.

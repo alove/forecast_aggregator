@@ -5,6 +5,23 @@ from forecast_collector.sources.election_statsheet import ElectionStatSheetSourc
 
 
 class ElectionStatSheetTests(unittest.TestCase):
+
+    def test_timeline_dates_are_normalized_and_untrusted_rows_are_excluded(self):
+        parsed = {
+            "house_forecast_timeline.csv": [
+                {"forecast_date": "8/12/26", "party": "dem"},
+                {"forecast_date": "narrative date", "party": "rep"},
+            ]
+        }
+        normalized = ElectionStatSheetSource._canonicalize_timeline_dates(parsed)
+        self.assertEqual(len(normalized["house_forecast_timeline.csv"]), 1)
+        self.assertEqual(
+            normalized["house_forecast_timeline.csv"][0]["forecast_date"],
+            "2026-08-12",
+        )
+        # The input dictionaries are not mutated.
+        self.assertEqual(parsed["house_forecast_timeline.csv"][0]["forecast_date"], "8/12/26")
+
     def test_normalize_small_fixture(self):
         source = ElectionStatSheetSource()
         date_rows = {

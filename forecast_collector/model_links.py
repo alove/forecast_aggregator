@@ -27,4 +27,9 @@ def model_web_url_for(vendor: str, metric_type: str) -> str:
             return "https://www.racetothewh.com/senate/26"
         return "https://www.racetothewh.com/house"
 
+    if vendor == "Kalshi":
+        if metric_type.startswith("US Senate"):
+            return "https://kalshi.com/category/elections/midterms"
+        return "https://kalshi.com/category/elections/midterms/house"
+
     return ""

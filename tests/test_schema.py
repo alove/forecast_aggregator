@@ -11,6 +11,7 @@ class SchemaTests(unittest.TestCase):
             "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
             "vendor": "Test",
             "vendor_run_id": "run-1",
+            "election_date": "2026-11-03",
             "row_type": "national",
             "source_record_id": "national",
             "source_url": "https://example.com",
@@ -33,6 +34,39 @@ class SchemaTests(unittest.TestCase):
         })
         self.assertEqual(validate_rows([row]), 1)
 
+
+    def test_short_or_prose_forecast_date_is_rejected_before_export(self):
+        row = blank_row()
+        row.update({
+            "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
+            "vendor": "Test",
+            "vendor_run_id": "run-date",
+            "vendor_forecast_date": "8/12/26",
+            "election_date": "2026-11-03",
+            "row_type": "national",
+            "source_record_id": "national",
+            "source_url": "https://example.com",
+        })
+        with self.assertRaisesRegex(OutputValidationError, "vendor_forecast_date"):
+            validate_rows([row])
+
+    def test_blank_optional_forecast_date_is_valid_but_election_date_must_be_iso(self):
+        row = blank_row()
+        row.update({
+            "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
+            "vendor": "Test",
+            "vendor_run_id": "run-date",
+            "vendor_forecast_date": "",
+            "election_date": "11/3/26",
+            "row_type": "national",
+            "source_record_id": "national",
+            "source_url": "https://example.com",
+        })
+        with self.assertRaisesRegex(OutputValidationError, "election_date"):
+            validate_rows([row])
+        row["election_date"] = "2026-11-03"
+        self.assertEqual(validate_rows([row]), 1)
+
     def test_same_record_id_is_valid_in_different_runs(self):
         rows = []
         for run in ("run-1", "run-2"):
@@ -40,6 +74,7 @@ class SchemaTests(unittest.TestCase):
             row.update({
                 "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
                 "vendor": "Test", "vendor_run_id": run,
+                "election_date": "2026-11-03",
                 "row_type": "national", "source_record_id": "national",
                 "source_url": "https://example.com",
             })
@@ -55,6 +90,7 @@ class SnapshotConsistencyTests(unittest.TestCase):
             "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
             "vendor": "Test",
             "vendor_run_id": "run-1",
+            "election_date": "2026-11-03",
             "row_type": row_type,
             "source_record_id": source_record_id,
             "source_url": "https://example.com",

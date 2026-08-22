@@ -36,6 +36,14 @@ class ModelWebUrlTests(unittest.TestCase):
             model_web_url_for("Race to the WH", "US House Popular Vote Projection"),
             "https://www.racetothewh.com/house",
         )
+        self.assertEqual(
+            model_web_url_for("Kalshi", "US Senate Race Party Probability"),
+            "https://kalshi.com/category/elections/midterms",
+        )
+        self.assertEqual(
+            model_web_url_for("Kalshi", "US House Popular Vote Projection"),
+            "https://kalshi.com/category/elections/midterms/house",
+        )
 
     def test_migration_adds_column_to_old_history_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as td:

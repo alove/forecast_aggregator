@@ -5,6 +5,7 @@ from math import isfinite
 import re
 from typing import Any, Iterable
 
+from .date_utils import is_iso_date
 from .errors import OutputValidationError
 
 SCHEMA_VERSION = "1.0.0"
@@ -222,6 +223,18 @@ def validate_rows(rows: Iterable[dict[str, Any]]) -> int:
             ) from exc
         if parsed.tzinfo is None:
             raise OutputValidationError(f"row {index} observed_datetime_utc lacks timezone")
+
+        forecast_date = str(row.get("vendor_forecast_date", "") or "").strip()
+        if forecast_date and not is_iso_date(forecast_date):
+            raise OutputValidationError(
+                f"row {index} vendor_forecast_date must be YYYY-MM-DD or blank; "
+                f"got {forecast_date!r}"
+            )
+        election_date = str(row.get("election_date", "") or "").strip()
+        if not is_iso_date(election_date):
+            raise OutputValidationError(
+                f"row {index} election_date must be YYYY-MM-DD; got {election_date!r}"
+            )
 
         key = (
             str(row["vendor"]), str(row["vendor_run_id"]),

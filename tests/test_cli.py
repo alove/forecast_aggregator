@@ -19,6 +19,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("electindex", sources.stdout)
         self.assertIn("grant-williams", sources.stdout)
         self.assertIn("Race to the WH", sources.stdout)
+        self.assertIn("kalshi", sources.stdout)
 
         schema = subprocess.run(
             [sys.executable, "-m", "forecast_collector", "schema"],

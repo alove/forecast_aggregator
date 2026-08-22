@@ -94,11 +94,13 @@ def command_sources() -> int:
     print("  election-statsheet  national House/Senate, House districts, Senate races, historical timeline")
     print("  electindex          national House/Senate/PV, House districts, Senate races, latest CSV snapshot")
     print("  grant-williams      national House/Senate/PV, House districts, Senate races, latest atomic JSON bundle")
-    print("  race-to-the-wh      national House/Senate/PV, House districts, Senate races, public Infogram forecast")
+    print("  race-to-the-wh      national House/PV, verified Senate toplines, House districts, Senate races")
+    print("  kalshi              national House/Senate/PV odds, 435 House and 35 Senate winner markets")
     print(
         "\nThe first three adapters use public raw GitHub CSV/JSON endpoints. "
         "Race to the WH discovers the current public House and Senate Infogram embeds "
-        "from the publisher pages and parses their embedded static forecast data."
+        "from the publisher pages and parses their embedded forecast data. Kalshi uses "
+        "the public Trade API v2 and normalizes live market-implied odds."
     )
     return 0
 

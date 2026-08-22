@@ -13,6 +13,7 @@ class StorageTests(unittest.TestCase):
         source.update({
             "observed_datetime_utc": "2026-08-12T12:00:00+00:00",
             "vendor": "Test", "vendor_run_id": "run-1", "row_type": "national",
+            "election_date": "2026-11-03",
             "source_record_id": "national", "source_url": "https://example.com",
             "house_seats_d": 220, "house_seats_r": 215, "house_seats_other": 0,
         })

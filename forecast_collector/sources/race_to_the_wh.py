@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from hashlib import sha256
 import html as html_lib
 import json
@@ -34,16 +34,6 @@ from .base import ForecastSource
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"\s+")
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
-_MONTHS = {
-    name.casefold(): index
-    for index, name in enumerate(
-        (
-            "January", "February", "March", "April", "May", "June",
-            "July", "August", "September", "October", "November", "December",
-        ),
-        start=1,
-    )
-}
 _FIPS_TO_ABBR = {fips: abbr for abbr, fips in ABBR_TO_FIPS.items()}
 _STATE_NAME_PATTERN = "|".join(
     re.escape(name) for name in sorted(ABBR_TO_NAME.values(), key=len, reverse=True)
@@ -93,8 +83,9 @@ class RaceToTheWHSource(ForecastSource):
     Race to the WH does not currently publish a documented CSV or JSON feed for
     the combined forecast. Its public Infogram embeds contain a static
     ``window.infographicData`` JSON payload. This adapter reads that payload,
-    identifies the national and race-level tables semantically, and refuses to
-    emit a snapshot unless the requested race collections are complete.
+    identifies race-level tables semantically, and uses conservative
+    metric-specific verification for national Senate toplines. Missing sections
+    remain blank and are reported as partial rather than inferred.
     """
 
     name = "Race to the WH"
@@ -555,11 +546,18 @@ class RaceToTheWHSource(ForecastSource):
             house_tables, house_texts, metric="control", chamber="house", chamber_size=100
         )
         house_vote = extract_house_popular_vote(house_tables, house_texts)
-        senate_seats = extract_party_metric(
-            senate_tables, senate_texts, metric="seats", chamber="senate", chamber_size=100
+        # National Senate toplines use a deliberately stricter parser than the
+        # House metrics. Infogram payloads contain race cards, historical
+        # distributions, axis labels, and other numeric fragments that can look
+        # superficially like party totals. Never combine those fragments or
+        # infer a missing party. Emit a Senate national metric only when one
+        # compact table explicitly identifies itself as the Senate topline and
+        # contains a complete, plausible D/R result for that metric.
+        senate_seats = extract_verified_senate_metric(
+            senate_tables, metric="seats"
         )
-        senate_control = extract_party_metric(
-            senate_tables, senate_texts, metric="control", chamber="senate", chamber_size=100
+        senate_control = extract_verified_senate_metric(
+            senate_tables, metric="control"
         )
 
         missing_national = []
@@ -590,9 +588,12 @@ class RaceToTheWHSource(ForecastSource):
             raise SourceFormatError(
                 "Race to the WH Infograms were readable but no usable forecast metrics or races were identified"
             )
-        forecast_date = extract_forecast_date(house_texts + senate_texts)
-        if not forecast_date and vendor_updated_at_utc:
-            forecast_date = vendor_updated_at_utc[:10]
+        # The publisher payload contains narrative and chart dates that are not
+        # documented as the forecast snapshot date.  A prior parser promoted one
+        # of those dates (2026-04-22) into vendor_forecast_date.  Per the collector
+        # data-quality rule, leave the source forecast date null unless Race to the
+        # WH exposes an unambiguous machine-readable model timestamp.
+        forecast_date = ""
 
         canonical = {
             "house_seats": _without_context(house_seats or {}),
@@ -639,7 +640,10 @@ class RaceToTheWHSource(ForecastSource):
             "house_popular_vote_r_pct": metric_value(house_vote, "R"),
             "house_popular_vote_other_pct": metric_value(house_vote, "Other"),
             "house_popular_vote_margin_d_minus_r_pct": metric_value(house_vote, "margin"),
-            "senate_seats_basis": str(metric_value(senate_seats, "context") or "published projected caucus seats"),
+            "senate_seats_basis": (
+                str(metric_value(senate_seats, "context"))
+                if senate_seats is not None else ""
+            ),
             "senate_seats_d": metric_value(senate_seats, "D"),
             "senate_seats_r": metric_value(senate_seats, "R"),
             "senate_seats_other": metric_value(senate_seats, "Other"),
@@ -664,6 +668,8 @@ class RaceToTheWHSource(ForecastSource):
                 "notes": (
                     f"house_embed={house_embed_url}; senate_embed={senate_embed_url}; "
                     f"house_tables={len(house_tables)}; senate_tables={len(senate_tables)}; "
+                    f"rtwh_senate_seats={'verified' if senate_seats is not None else 'unavailable'}; "
+                    f"rtwh_senate_control={'verified' if senate_control is not None else 'unavailable'}; "
                     f"partial_sections={' | '.join(partial_sections) if partial_sections else 'none'}"
                 ),
             })
@@ -1902,6 +1908,150 @@ def _metric_label_score(label: str, *, metric: str, chamber: str) -> int:
     return 0
 
 
+def _strict_senate_raw_pair(
+    d_raw: Any, r_raw: Any, *, percentages: bool
+) -> tuple[float, float] | None:
+    """Parse an explicitly supplied D/R pair without inferring either side."""
+
+    d = _parse_pct(d_raw) if percentages else _parse_number(d_raw)
+    r = _parse_pct(r_raw) if percentages else _parse_number(r_raw)
+    if d is None or r is None:
+        return None
+    if percentages and max(d, r) <= 1.000001 and d + r <= 1.050001:
+        d *= 100.0
+        r *= 100.0
+    return d, r
+
+
+def extract_verified_senate_metric(
+    tables: list[InfogramTable], *, metric: str
+) -> dict[str, Any] | None:
+    """Return a high-confidence national Senate seats/control topline.
+
+    The public Infogram contains many unrelated numeric tables. A generic
+    semantic search previously promoted fragments from those tables into
+    impossible national values (for example 0.6 Democratic seats and a
+    66.363 percent ``Other`` control probability). This extractor is purposely
+    conservative:
+
+    * values must come from one compact table, never from unrelated text;
+    * the table must explicitly identify the Senate and the requested metric;
+    * both Democratic and Republican values must be supplied in that table;
+    * control probabilities must exhaust essentially 100 percent between D/R;
+    * full-chamber seat totals must be plausible and leave at most ten seats
+      outside the two caucuses.
+
+    When any condition is not met, ``None`` is returned and the export omits
+    that national metric for the pull. No carry-forward or race aggregation is
+    performed.
+    """
+
+    if metric not in {"seats", "control"}:
+        raise ValueError("verified Senate metric must be 'seats' or 'control'")
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    probability_terms = ("chance", "probability", "prob", "odds")
+    seat_phrases = (
+        "projected seats", "expected seats", "average seats",
+        "avg seats", "most likely seats", "seat projection",
+    )
+
+    for table in tables:
+        if len(table.rows) > 12:
+            continue
+        table_norm = _norm(table.context)
+        if "senate" not in table_norm:
+            continue
+
+        if metric == "seats":
+            if not any(phrase in table_norm for phrase in seat_phrases):
+                continue
+        else:
+            if not any(word in table_norm for word in ("majority", "control")):
+                continue
+            if not any(word in table_norm for word in probability_terms):
+                # A compact chart title may say "Senate Majority" while the
+                # actual column says "Chance"; the candidate label check below
+                # supplies the probability evidence in that layout.
+                pass
+
+        for context, metric_label, d_raw, r_raw, o_raw in (
+            list(_party_column_candidates(table))
+            + list(_party_row_candidates(table))
+        ):
+            label_norm = _norm(metric_label)
+            combined_norm = _norm(f"{table.context} {metric_label}")
+            if metric == "seats":
+                if "seat" not in label_norm:
+                    continue
+                if any(term in label_norm for term in probability_terms):
+                    continue
+                raw_pair = _strict_senate_raw_pair(
+                    d_raw, r_raw, percentages=False
+                )
+                if raw_pair is None:
+                    continue
+                values = _normalize_party_values(
+                    d_raw, r_raw, o_raw, target=100.0, percentages=False
+                )
+                if values is None:
+                    continue
+                d, r, other = values
+                # A 2026 full-Senate projection cannot plausibly put either
+                # major caucus near zero. The broad bounds are intentionally
+                # looser than any realistic outcome while rejecting charts
+                # about seats up, distributions, or individual races.
+                if not (25.0 <= d <= 75.0 and 25.0 <= r <= 75.0):
+                    continue
+                if other > 10.0:
+                    continue
+            else:
+                if not any(term in label_norm for term in probability_terms + ("majority", "control")):
+                    continue
+                if "seat" in label_norm:
+                    continue
+                raw_pair = _strict_senate_raw_pair(
+                    d_raw, r_raw, percentages=True
+                )
+                if raw_pair is None:
+                    continue
+                raw_d, raw_r = raw_pair
+                # Do not manufacture an ``Other`` outcome from a missing
+                # portion of an unrelated probability chart. A Senate control
+                # topline must directly provide complementary D/R chances.
+                if abs((raw_d + raw_r) - 100.0) > 0.2:
+                    continue
+                parsed_other = _parse_pct(o_raw)
+                if parsed_other is not None and parsed_other > 0.2:
+                    continue
+                values = _normalize_party_values(
+                    raw_d, raw_r, 0.0, target=100.0, percentages=True
+                )
+                if values is None:
+                    continue
+                d, r, other = values
+                if other > 0.000001:
+                    continue
+
+            score = (
+                _metric_context_score(combined_norm, metric=metric, chamber="senate")
+                + _metric_label_score(metric_label, metric=metric, chamber="senate")
+                + (8 if "national" in table_norm else 0)
+            )
+            candidates.append((score, {
+                "D": d,
+                "R": r,
+                "Other": other,
+                "context": _clean_text(
+                    f"verified explicit Senate {metric} topline: {context}"
+                ),
+            }))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def extract_party_metric(
     tables: list[InfogramTable],
     texts: list[str],
@@ -2060,33 +2210,6 @@ def latest_payload_timestamp(*payloads: dict[str, Any]) -> str:
             if timestamp:
                 candidates.append(timestamp)
     return max(candidates) if candidates else ""
-
-
-def extract_forecast_date(texts: Iterable[str]) -> str:
-    candidates: list[tuple[int, date]] = []
-    month_names = "|".join(name.title() for name in _MONTHS)
-    pattern = re.compile(
-        rf"\b(?P<prefix>last\s+updated|updated|forecast\s+updated|as\s+of|update)\b"
-        rf"[^A-Za-z0-9]{{0,30}}(?P<month>{month_names})\s+"
-        rf"(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(?P<year>20\d{{2}}))?",
-        re.IGNORECASE,
-    )
-    for text in texts:
-        for match in pattern.finditer(text):
-            year = int(match.group("year") or 2026)
-            month = _MONTHS[match.group("month").casefold()]
-            day = int(match.group("day"))
-            try:
-                parsed = date(year, month, day)
-            except ValueError:
-                continue
-            prefix = match.group("prefix").casefold()
-            score = 3 if "last" in prefix or "as of" in prefix else 1
-            candidates.append((score, parsed))
-    if not candidates:
-        return ""
-    max_score = max(score for score, _ in candidates)
-    return max(parsed for score, parsed in candidates if score == max_score).isoformat()
 
 
 def record_to_canonical(record: RaceRecord) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import io
 import json
 from typing import Any
 
+from ..date_utils import canonical_date_or_blank
 from ..errors import SourceFormatError
 from ..http import HttpClient
 from ..models import RawArtifact, SourceResult
@@ -134,7 +135,7 @@ class ElectIndexSource(ForecastSource):
             rows=rows,
             raw_artifacts=[RawArtifact(filename, content) for filename, content in payloads.items()],
             details={
-                "forecast_dates": [model_date],
+                "forecast_dates": [model_date] if model_date else [],
                 "run_ids": [run_id],
                 "model_status": "published",
             },
@@ -156,13 +157,41 @@ class ElectIndexSource(ForecastSource):
         except KeyError as exc:
             raise SourceFormatError(f"ElectIndex snapshot is missing {exc.args[0]}") from exc
 
-        model_dates = sorted(row["date"] for row in national_rows if row.get("date"))
-        if not model_dates:
-            raise SourceFormatError("national_indicators.csv has no dated rows")
-        model_date = model_dates[-1]
+        dated_rows: dict[str, list[dict[str, str]]] = {}
+        undated_values: set[str] = set()
+        for row in national_rows:
+            raw_date = (row.get("date") or "").strip()
+            if not raw_date:
+                continue
+            canonical = canonical_date_or_blank(raw_date)
+            if canonical:
+                dated_rows.setdefault(canonical, []).append(row)
+            else:
+                undated_values.add(raw_date)
+
+        if dated_rows:
+            model_date = max(dated_rows)
+            selected_national_rows = dated_rows[model_date]
+            label_date = model_date
+        elif len(undated_values) == 1:
+            # A single current snapshot can still be used when its optional
+            # display date is untrusted. The date is exported as blank/NULL;
+            # the content hash keeps the run identity stable and auditable.
+            raw_date = next(iter(undated_values))
+            model_date = ""
+            selected_national_rows = [
+                row for row in national_rows
+                if (row.get("date") or "").strip() == raw_date
+            ]
+            label_date = "undated"
+        else:
+            raise SourceFormatError(
+                "national_indicators.csv has no single trustworthy latest date"
+            )
+
         national = self._single_consistent_row(
-            [row for row in national_rows if row.get("date") == model_date],
-            label=f"national-indicators {model_date}",
+            selected_national_rows,
+            label=f"national-indicators {label_date}",
         )
 
         house = self._single_consistent_row(
@@ -230,7 +259,7 @@ class ElectIndexSource(ForecastSource):
         canonical = json.dumps(
             canonical_snapshot, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
-        run_id = f"electindex-{model_date}-{sha256(canonical).hexdigest()[:16]}"
+        run_id = f"electindex-{model_date or 'undated'}-{sha256(canonical).hexdigest()[:16]}"
         common = {
             "observed_datetime_utc": observed_datetime_utc,
             "vendor": self.name,

@@ -6,6 +6,7 @@ import io
 import json
 from typing import Any
 
+from ..date_utils import canonical_date_or_blank
 from ..errors import SourceFormatError
 from ..http import HttpClient
 from ..models import RawArtifact, SourceResult
@@ -134,6 +135,26 @@ class ElectionStatSheetSource(ForecastSource):
                 collapsed[filename] = count
         return cleaned, collapsed
 
+    @staticmethod
+    def _canonicalize_timeline_dates(
+        parsed: dict[str, list[dict[str, str]]]
+    ) -> dict[str, list[dict[str, str]]]:
+        normalized_parsed: dict[str, list[dict[str, str]]] = {}
+        for filename, rows in parsed.items():
+            normalized_rows: list[dict[str, str]] = []
+            for source_row in rows:
+                forecast_date = canonical_date_or_blank(source_row.get("forecast_date"))
+                if not forecast_date:
+                    # An untrusted display date cannot be ordered safely in a
+                    # historical timeline, so it is excluded rather than
+                    # guessed. Other valid dates in the same file remain usable.
+                    continue
+                row = dict(source_row)
+                row["forecast_date"] = forecast_date
+                normalized_rows.append(row)
+            normalized_parsed[filename] = normalized_rows
+        return normalized_parsed
+
     def collect(
         self,
         client: HttpClient,
@@ -151,6 +172,8 @@ class ElectionStatSheetSource(ForecastSource):
             parsed[filename] = self._parse_csv(
                 filename, response.content, self.required_columns[filename]
             )
+
+        parsed = self._canonicalize_timeline_dates(parsed)
 
         date_sets = [
             {row["forecast_date"] for row in rows if row.get("forecast_date")}

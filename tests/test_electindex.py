@@ -50,6 +50,54 @@ class ElectIndexTests(unittest.TestCase):
         self.assertEqual(validate_rows(rows), 3)
 
 
+    @staticmethod
+    def _national_only_fixture(raw_date: str):
+        return {
+            "chambers.csv": [
+                {
+                    "chamber": "House", "avg_dem_seats": "220", "avg_gop_seats": "215",
+                    "projected_dem_seats": "220", "dem_control_pct": "55", "races": "435",
+                },
+                {
+                    "chamber": "Senate", "avg_dem_seats": "50", "avg_gop_seats": "50",
+                    "projected_dem_seats": "50", "dem_control_pct": "50", "races": "35",
+                },
+            ],
+            "national_indicators.csv": [{
+                "date": raw_date, "house_pv_dem": "53", "house_pv_rep": "47",
+                "house_pv_oth": "0", "house_pv_margin": "6",
+            }],
+            "races_summary.csv": [],
+        }
+
+    def test_short_us_source_date_is_normalized_before_export(self):
+        rows, run_id, model_date = ElectIndexSource().normalize(
+            self._national_only_fixture("8/12/26"),
+            observed_datetime_utc="2026-08-21T23:42:32+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        self.assertEqual(model_date, "2026-08-12")
+        self.assertEqual(rows[0]["vendor_forecast_date"], "2026-08-12")
+        self.assertTrue(run_id.startswith("electindex-2026-08-12-"))
+        self.assertEqual(validate_rows(rows), 1)
+
+    def test_single_untrusted_optional_source_date_becomes_null(self):
+        rows, run_id, model_date = ElectIndexSource().normalize(
+            self._national_only_fixture("Forecast as of sometime in August"),
+            observed_datetime_utc="2026-08-21T23:42:32+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        self.assertEqual(model_date, "")
+        self.assertEqual(rows[0]["vendor_forecast_date"], "")
+        self.assertTrue(run_id.startswith("electindex-undated-"))
+        self.assertEqual(validate_rows(rows), 1)
+
+
+
 class ElectIndexNoMajorPartyValidationTests(unittest.TestCase):
     def test_no_democrat_conflicting_independent_probability_is_rejected(self):
         row = {

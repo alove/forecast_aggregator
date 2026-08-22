@@ -4,12 +4,14 @@ from unittest.mock import patch
 
 from forecast_collector.browser_capture import BrowserCapture
 from forecast_collector.errors import SourceFormatError
+from forecast_collector.export import split_rows
 from forecast_collector.http import HttpResponse
 from forecast_collector.schema import validate_rows
 from forecast_collector.sources.race_to_the_wh import (
     RaceToTheWHSource,
     _normalize_party_values,
     extract_infogram_tables,
+    extract_verified_senate_metric,
     parse_house_table,
     select_house_records,
 )
@@ -276,11 +278,12 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
             include_senate_races=True,
             require_complete_counts=False,
         )
-        self.assertTrue(run_id.startswith("race-to-the-wh-2026-08-12-"))
-        self.assertEqual(forecast_date, "2026-08-12")
+        self.assertTrue(run_id.startswith("race-to-the-wh-undated-"))
+        self.assertEqual(forecast_date, "")
         self.assertEqual(diagnostics["vendor_updated_at_utc"], "2026-08-12T17:45:09+00:00")
         self.assertEqual(len(rows), 5)
         self.assertEqual(rows[0]["vendor_updated_at_utc"], "2026-08-12T17:45:09+00:00")
+        self.assertEqual(rows[0]["vendor_forecast_date"], "")
         self.assertEqual(rows[0]["house_seats_d"], 231.0)
         self.assertEqual(rows[0]["house_seats_r"], 204.0)
         self.assertEqual(rows[0]["senate_seats_d"], 51.0)
@@ -291,6 +294,40 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
         senate_rows = [row for row in rows if row["row_type"] == "senate_race"]
         self.assertTrue(any(row["special_election"] for row in senate_rows))
         self.assertEqual(validate_rows(rows), 5)
+
+    def test_narrative_chart_date_is_not_promoted_to_forecast_date(self):
+        house = infogram_payload(
+            chart(
+                "Model update April 22, 2026 / National House Forecast",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "60%", "225"],
+                    ["Republicans", "40%", "210"],
+                ],
+            )
+        )
+        senate = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "50%", "50"],
+                    ["Republicans", "50%", "50"],
+                ],
+            )
+        )
+        rows, run_id, forecast_date, diagnostics = RaceToTheWHSource().normalize_infograms(
+            house,
+            senate,
+            observed_datetime_utc="2026-08-21T14:00:00+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        self.assertEqual(forecast_date, "")
+        self.assertTrue(run_id.startswith("race-to-the-wh-undated-"))
+        self.assertEqual(rows[0]["vendor_forecast_date"], "")
+        self.assertEqual(diagnostics["forecast_date"], "")
 
     def test_generic_favorite_probability_uses_projected_margin_party(self):
         table = chart(
@@ -635,6 +672,154 @@ class RaceToTheWHInfogramTests(unittest.TestCase):
         self.assertEqual(result.details["senate_record_count"], 35)
         self.assertEqual(len(result.rows), 471)
         self.assertEqual(validate_rows(result.rows), 471)
+
+    def test_bad_senate_topline_fragment_is_omitted_not_normalized(self):
+        house = infogram_payload(
+            chart(
+                "National House Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "76.3%", "231"],
+                    ["Republicans", "23.7%", "204"],
+                ],
+            )
+        )
+        senate = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "1%", "0.6"],
+                    ["Republicans", "32.637%", "99.4"],
+                ],
+                sheet="11 data",
+            )
+        )
+
+        rows, _, _, diagnostics = RaceToTheWHSource().normalize_infograms(
+            house,
+            senate,
+            observed_datetime_utc="2026-08-21T22:00:00+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        national = next(row for row in rows if row["row_type"] == "national")
+        self.assertEqual(national["senate_seats_d"], "")
+        self.assertEqual(national["senate_seats_r"], "")
+        self.assertEqual(national["senate_control_d_pct"], "")
+        self.assertEqual(national["senate_control_r_pct"], "")
+        self.assertIn("Senate seat projection", diagnostics["partial_sections"][0])
+        self.assertIn("Senate control probability", diagnostics["partial_sections"][0])
+        self.assertIn("rtwh_senate_seats=unavailable", national["notes"])
+        self.assertIn("rtwh_senate_control=unavailable", national["notes"])
+
+        exported, _ = split_rows(rows)
+        metric_types = {row["metric_type"] for row in exported}
+        self.assertNotIn("US Senate Seats by Party", metric_types)
+        self.assertNotIn("US Senate Party Probability", metric_types)
+        self.assertIn("US House Seats by Party", metric_types)
+        self.assertIn("US House Party Probability", metric_types)
+
+    def test_verified_explicit_senate_topline_is_retained_and_marked(self):
+        senate = infogram_payload(
+            chart(
+                "National Senate Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning Senate", "Projected Seats"],
+                    ["Democrats", "40%", "49"],
+                    ["Republicans", "60%", "51"],
+                ],
+            )
+        )
+        tables = extract_infogram_tables(senate)
+        seats = extract_verified_senate_metric(tables, metric="seats")
+        control = extract_verified_senate_metric(tables, metric="control")
+        self.assertEqual(seats["D"], 49.0)
+        self.assertEqual(seats["R"], 51.0)
+        self.assertEqual(seats["Other"], 0.0)
+        self.assertEqual(control["D"], 40.0)
+        self.assertEqual(control["R"], 60.0)
+        self.assertEqual(control["Other"], 0.0)
+
+        house = infogram_payload(
+            chart(
+                "National House Majority and Projected Seats",
+                [
+                    ["Party", "Chance of Winning House", "Projected Seats"],
+                    ["Democrats", "55%", "220"],
+                    ["Republicans", "45%", "215"],
+                ],
+            )
+        )
+        rows, _, _, _ = RaceToTheWHSource().normalize_infograms(
+            house,
+            senate,
+            observed_datetime_utc="2026-08-21T22:00:00+00:00",
+            include_house_districts=False,
+            include_senate_races=False,
+            require_complete_counts=False,
+        )
+        national = rows[0]
+        self.assertIn("rtwh_senate_seats=verified", national["notes"])
+        self.assertIn("rtwh_senate_control=verified", national["notes"])
+        exported, _ = split_rows(rows)
+        senate_rows = [
+            row for row in exported
+            if row["metric_type"] in {
+                "US Senate Seats by Party",
+                "US Senate Party Probability",
+            }
+        ]
+        self.assertEqual(len(senate_rows), 6)
+
+    def test_senate_control_does_not_create_other_from_missing_probability(self):
+        payload = infogram_payload(
+            chart(
+                "National Senate Majority Probability",
+                [
+                    ["Party", "Chance of Winning Senate"],
+                    ["Democrats", "1%"],
+                    ["Republicans", "32.637%"],
+                ],
+            )
+        )
+        self.assertIsNone(
+            extract_verified_senate_metric(
+                extract_infogram_tables(payload), metric="control"
+            )
+        )
+
+    def test_senate_seats_rejects_distribution_or_race_scale_values(self):
+        payload = infogram_payload(
+            chart(
+                "National Senate Projected Seats",
+                [
+                    ["Party", "Projected Seats"],
+                    ["Democrats", "0.6"],
+                    ["Republicans", "99.4"],
+                ],
+            )
+        )
+        self.assertIsNone(
+            extract_verified_senate_metric(
+                extract_infogram_tables(payload), metric="seats"
+            )
+        )
+
+    def test_senate_national_metrics_are_never_built_across_text_fragments(self):
+        payload = {
+            "title": "2026 Senate Forecast",
+            "text_a": "Democrats chance of Senate control 41%",
+            "text_b": "Republicans chance of Senate control 59%",
+            "text_c": "Democrats projected Senate seats 49",
+            "text_d": "Republicans projected Senate seats 51",
+        }
+        tables = extract_infogram_tables(payload)
+        self.assertEqual(tables, [])
+        self.assertIsNone(extract_verified_senate_metric(tables, metric="control"))
+        self.assertIsNone(extract_verified_senate_metric(tables, metric="seats"))
+
 
 
 if __name__ == "__main__":

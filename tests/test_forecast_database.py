@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from forecast_collector.data_repairs import repair_rtwh_canonical_data
+
 ROOT = Path(__file__).resolve().parents[1]
 DB_ROOT = ROOT / "forecast_database_ecs"
 IMAGE_ROOT = DB_ROOT / "image"
@@ -88,6 +90,72 @@ class ForecastDatabasePreparerTests(unittest.TestCase):
             )
             self.assertNotIn(',"",', national_csv)
             self.assertNotIn(',"",', state_csv)
+
+
+    def test_legacy_short_forecast_date_is_repaired_before_database_validation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            national = temp_path / "national.csv"
+            state = temp_path / "state.csv"
+
+            for source, target in ((NATIONAL_SAMPLE, national), (STATE_SAMPLE, state)):
+                with source.open(encoding="utf-8-sig", newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    fields = list(reader.fieldnames or [])
+                    rows = list(reader)
+                # Reproduce the live failure exactly: a valid U.S. display date
+                # reached a canonical field that requires ISO representation.
+                for row in rows:
+                    if row["vendor_forecast_date"] == "2026-08-12":
+                        row["vendor_forecast_date"] = "8/12/26"
+                with target.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(
+                        handle,
+                        fieldnames=fields,
+                        quoting=csv.QUOTE_ALL,
+                        lineterminator="\n",
+                    )
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+            before = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER_PATH),
+                    "--national-input",
+                    str(national),
+                    "--state-input",
+                    str(state),
+                    "--validate-only",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(before.returncode, 0)
+            self.assertIn("invalid vendor_forecast_date: '8/12/26'", before.stderr)
+
+            national_summary = repair_rtwh_canonical_data(national)
+            state_summary = repair_rtwh_canonical_data(state)
+            self.assertGreater(national_summary.date_normalized_count, 0)
+            self.assertGreater(state_summary.date_normalized_count, 0)
+
+            after = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER_PATH),
+                    "--national-input",
+                    str(national),
+                    "--state-input",
+                    str(state),
+                    "--validate-only",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertIn("input validation passed", after.stdout)
 
     def test_leading_zero_geography_identifiers_remain_text(self):
         with NATIONAL_SAMPLE.open(encoding="utf-8", newline="") as handle:
